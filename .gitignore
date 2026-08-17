@@ -9,6 +9,7 @@
 # --- our own OpenMV vision scripts ---
 !.gitignore
 !README.md
+!CLAUDE.md
 !chili_stem_detect.py
 !chili_bench_test.py
 !chili_leftright_gpio.py
