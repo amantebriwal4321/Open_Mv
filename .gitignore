@@ -1,27 +1,16 @@
-# Ignore everything by default to protect proprietary assets, then whitelist code
-*
-
-# Allow repo documentation and configs
-!.gitignore
-!README.md
-!CLAUDE.md
-
-# Allow Python code and projects
-!*.py
-!System1/
-!System1/**
-!System2/
-!System2/**
-!Trial codes/
-!Trial codes/**
-!mv_codes/
-!mv_codes/**
-
-# Ignore temporary and build caches
-__pycache__/
+# Ignore binary assets, videos, zips, PDFs, compiled bytecode, and test datasets
+*.pdf
+*.mp4
+*.jpeg
+*.jpg
+*.zip
+*.mpy
 *.py[cod]
 *$py.class
+__pycache__/
 .vscode/
 .idea/
 .gemini/
 scratch/
+System1/uncertain_images/
+Camera_Videos/
