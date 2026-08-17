@@ -1,19 +1,27 @@
-# Ignore EVERYTHING by default, then allow only our own source files.
-# This is deliberate: the working folder also holds the company's machine CAD,
-# internal specification documents, factory photos, a third-party (Keyence)
-# document and the vendor's compiled .mpy modules. None of that is ours to
-# publish, so a whitelist is used instead of a blacklist - a new confidential
-# file dropped into this folder can never be committed by accident.
+# Ignore everything by default to protect proprietary assets, then whitelist code
 *
 
-# --- our own OpenMV vision scripts ---
+# Allow repo documentation and configs
 !.gitignore
 !README.md
 !CLAUDE.md
-!chili_stem_detect.py
-!chili_bench_test.py
-!chili_leftright_gpio.py
-!chili_leftright_v2.py
-!chili_factory_multi.py
-!chili_stopper_factory.py
-!main.py
+
+# Allow Python code and projects
+!*.py
+!System1/
+!System1/**
+!System2/
+!System2/**
+!Trial codes/
+!Trial codes/**
+!mv_codes/
+!mv_codes/**
+
+# Ignore temporary and build caches
+__pycache__/
+*.py[cod]
+*$py.class
+.vscode/
+.idea/
+.gemini/
+scratch/
