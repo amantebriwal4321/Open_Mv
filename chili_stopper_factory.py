@@ -1,4 +1,19 @@
-# chili_stopper_factory.py  —  OpenMV Cam H7 Plus   (v4: which end arrived)
+# chili_stopper_factory.py  —  OpenMV Cam H7 Plus
+# ==================================================================================
+#  VERSION 6      (bumped every time the code changes - check this first)
+# ----------------------------------------------------------------------------------
+#  v6  size gates loosened: only the chili's dark BODY is detected (the pale
+#      stalk is not dark), so it is shorter and stubbier than a whole chili and
+#      was being thrown out.  Tilt is now a tie-breaker, not a hard gate.
+#  v5  tilt limit opened to 60 deg (a chili lying at an angle was being thrown
+#      away before anything else ran); EMPTY now explains WHY nothing was found
+#  v4  thickness became the main clue (fat end = stem), redness only a helper;
+#      stopper-distance gate switched off; big answer drawn across the top
+#  v3  picks the REDDEST object so it stops locking onto background and wood;
+#      channel ROI narrowed to the bright metal only
+#  v2  follows the chili's own axis, so any angle works; finds it by darkness
+#  v1  fixed upright slices at the stopper, fixed red colour range
+# ==================================================================================
 # ============================ WHAT THIS DOES (simple words) ========================
 # Every chili must leave the machine facing the SAME way, so the ones that come
 # in the wrong way round have to be turned.  The camera looks at the chili in
@@ -78,12 +93,17 @@ DARK_L_MAX    = 70
 # ---- what counts as a chili (these are what stop it seeing other things) ----
 MIN_AREA      = 250      # smallest blob accepted, in pixels
 MAX_AREA      = 30000    # largest blob accepted
-MIN_ASPECT    = 2.0      # must be clearly long, not round
+MIN_ASPECT    = 1.5      # must be longish, not round.  Kept low because the
+                         # pale stalk is not dark, so only the shorter, stubbier
+                         # BODY of the chili is what actually gets detected.
 MAX_ASPECT    = 14.0     # but not a hair-thin line
 MAX_WIDTH_PX  = 60       # a chili is THIN: reject fat dark patches
-MAX_TILT_DEG  = 35       # must lie ALONG the channel, within this many degrees
+MAX_TILT_DEG  = 80       # must not lie flat ACROSS the channel.  Very loose on
+                         # purpose: redness is what rejects non-chili things
+                         # now, and tilt only breaks ties (see the cost below).
 EXTENT_MIN    = 0.18     # blob pixels / box area: rejects sparse noise
-MIN_LEN       = 40       # px  <-- measure YOUR chilies on screen and tighten
+MIN_LEN       = 22       # px  <-- only the dark BODY is seen, not the pale
+                         # stalk, so this must be well under the whole chili
 MAX_LEN       = 320      # px
 BLOB_MARGIN   = 14       # glue broken pieces of the SAME chili together
 
@@ -296,9 +316,12 @@ def shape_ok(b):
         return False
     return True
 
+# why nothing was found - filled in every scan so "EMPTY" can explain itself
+scan = {"raw": 0, "shape": 0, "best_tilt": -1}
+
 def find_chili(img, obj_thrs):
     """The most chili-like object lying in the channel, nearest the stopper.
-    Returns (E_stop, E_far, width, dist, rect, tilt) or None."""
+    Returns (E_stop, E_far, width, dist, rect, tilt, red) or None."""
     kw = {"roi": CHANNEL_ROI, "pixels_threshold": MIN_AREA,
           "area_threshold": MIN_AREA, "merge": True, "margin": BLOB_MARGIN}
     try:
@@ -307,13 +330,17 @@ def find_chili(img, obj_thrs):
         kw.pop("margin")
         blobs = img.find_blobs(obj_thrs, **kw)
 
+    scan["raw"], scan["shape"], scan["best_tilt"] = len(blobs), 0, -1
     best, best_cost = None, None
     for b in blobs:
         if not shape_ok(b):
             continue
+        scan["shape"] += 1
         E0, E1, width = axis_ends(b)
         tilt = tilt_deg(E0, E1)
-        if tilt > MAX_TILT_DEG:            # not lying along the channel
+        if scan["best_tilt"] < 0 or tilt < scan["best_tilt"]:
+            scan["best_tilt"] = int(tilt)
+        if tilt > MAX_TILT_DEG:            # lying across the channel
             continue
         E_stop, E_far, dist = pick_stopper_end(E0, E1)
         rect = (_get(b, "x"), _get(b, "y"), _get(b, "w"), _get(b, "h"))
@@ -326,7 +353,7 @@ def find_chili(img, obj_thrs):
         if red is None:
             red = -50.0
         # lower cost wins: mostly redness, then straightness, then nearness
-        cost = -red + 0.10 * tilt + 0.05 * max(0, dist)
+        cost = -red + 0.25 * tilt + 0.05 * max(0, dist)
         if best_cost is None or cost < best_cost:
             best = (E_stop, E_far, width, dist, rect, tilt, red)
             best_cost = cost
@@ -500,11 +527,18 @@ while True:
             draw_scene(img, r, None, (255, 255, 255),
                        REASON_TEXT.get(r["reason"], "EMPTY"),
                        "CALIBRATE", total, clock.fps())
-        print("CALIB %-24s score=%+.2f | thick %d vs %d (%+.2f) | "
-              "red %+.2f | tilt=%d fps=%.0f"
-              % (REASON_TEXT.get(r["reason"], "OK"), score,
-                 r["o_near"], r["o_far"], r["s_width"], r["s_red"],
-                 r["tilt"], clock.fps()))
+        if r["reason"] == "empty":
+            # explain WHY nothing was found instead of just saying EMPTY
+            print("CALIB EMPTY  blobs=%d shape_ok=%d best_tilt=%d "
+                  "(limit %d) L<=%d fps=%.0f"
+                  % (scan["raw"], scan["shape"], scan["best_tilt"],
+                     MAX_TILT_DEG, lim, clock.fps()))
+        else:
+            print("CALIB %-24s score=%+.2f | thick %d vs %d (%+.2f) | "
+                  "red %+.2f | tilt=%d fps=%.0f"
+                  % (REASON_TEXT.get(r["reason"], "OK"), score,
+                     r["o_near"], r["o_far"], r["s_width"], r["s_red"],
+                     r["tilt"], clock.fps()))
         continue
 
     # ------------------------------ WAIT ------------------------------
