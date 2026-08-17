@@ -93,15 +93,22 @@ END_BOX_MIN   = 10       # smallest / largest measuring box side, in pixels
 END_BOX_MAX   = 46
 MIN_BOX_OBJ   = 15       # chili pixels a box needs before it can be trusted
 
-# ---- telling the ends apart: RELATIVE redness, no fixed colour range ----
-MIN_A_SPREAD  = 4.0      # least redness difference that can be trusted
+# ---- telling the ends apart: two clues, both RELATIVE to this chili ----
+# 1) THICKNESS (main clue).  The stem end of the body is FAT and blunt; the
+#    other end tapers to a narrow point.  This is shape, so glare, shadows and
+#    odd lighting cannot break it.  It is why this works when colour does not.
+# 2) REDNESS (helper).  The stem end is the paler end.  Used when it can be
+#    read; quietly ignored when the light has washed the colour out.
+W_WIDTH       = 1.6      # weight of the thickness clue
+W_RED         = 1.0      # weight of the redness clue
 A_FULL        = 12.0     # redness difference that counts as "totally clear"
+MIN_SCORE     = 0.06     # below this the two ends really do look the same
 
 # ---- rules ----
-STOPPER_GAP_MAX_PX = 90  # the chili end must be this close to the stopper edge.
-                         # 90 = loose, for BENCH testing without a real stopper.
-                         # SET BACK TO ABOUT 40 ON THE MACHINE - it is what
-                         # stops it judging a chili that is still sliding in.
+# The chili always stops in the same place, so there is no need to demand it
+# be near the frame edge.  Set this to e.g. 60 only if you want the camera to
+# ignore chilies that have not reached the stopper yet.
+STOPPER_GAP_MAX_PX = 9999   # 9999 = gate switched off
 DECIDE_MIN     = 0.20    # |score| needed to accept an answer
 STABLE_N       = 4       # frames the same answer must repeat before locking
 CLEAR_FRAMES   = 5       # empty frames before the next chili is accepted
@@ -342,7 +349,8 @@ def look(img, obj_thrs):
     """
     out = {"reason": "empty", "score": 0.0, "a_near": None, "a_far": None,
            "spread": 0.0, "boxes": [], "rect": None, "E_stop": None,
-           "E_far": None, "dist": -1, "tilt": -1, "red": 0.0}
+           "E_far": None, "dist": -1, "tilt": -1, "red": 0.0,
+           "o_near": 0, "o_far": 0, "s_width": 0.0, "s_red": 0.0}
 
     found = find_chili(img, obj_thrs)
     if found is None:
@@ -359,27 +367,37 @@ def look(img, obj_thrs):
         out["reason"] = "not_at_stopper"
         return out
 
-    # both boxes must really sit on the chili
-    if (count_px(img, boxes[0], obj_thrs) < MIN_BOX_OBJ or
-            count_px(img, boxes[1], obj_thrs) < MIN_BOX_OBJ):
-        out["reason"] = "no_read"
+    # how much chili is in each end box = how THICK the chili is there
+    o_near = count_px(img, boxes[0], obj_thrs)
+    o_far = count_px(img, boxes[1], obj_thrs)
+    out["o_near"], out["o_far"] = o_near, o_far
+    if o_near + o_far < MIN_BOX_OBJ:
+        out["reason"] = "no_read"          # boxes are not on the chili at all
         return out
 
+    # clue 1: THICKNESS.  Fat blunt end = stem, narrow pointed end = tip.
+    s_width = (o_near - o_far) / float(o_near + o_far)
+
+    # clue 2: REDNESS.  The stem end is the paler one.  Skipped if unreadable.
     a_near = region_redness(img, boxes[0], obj_thrs)
     a_far = region_redness(img, boxes[1], obj_thrs)
-    if a_near is None or a_far is None:
-        out["reason"] = "no_read"
-        return out
-    out["a_near"], out["a_far"] = a_near, a_far
+    if a_near is not None and a_far is not None:
+        out["a_near"], out["a_far"] = a_near, a_far
+        spread = a_far - a_near
+        out["spread"] = spread
+        s_red = min(1.0, max(-1.0, spread / A_FULL))
+        rw = W_RED
+    else:
+        s_red, rw = 0.0, 0.0
 
-    spread = a_far - a_near
-    out["spread"] = spread
-    if abs(spread) < MIN_A_SPREAD:
-        out["reason"] = "no_contrast"      # both ends alike: say so, don't guess
-        return out
+    # both clues point the same way: positive = STEM arrived first
+    score = (W_WIDTH * s_width + rw * s_red) / (W_WIDTH + rw)
+    out["s_width"], out["s_red"] = s_width, s_red
+    out["score"] = score
 
-    # stopper end LESS red -> stem arrived first (positive score)
-    out["score"] = min(1.0, max(-1.0, spread / A_FULL))
+    if abs(score) < MIN_SCORE:
+        out["reason"] = "no_contrast"      # ends alike: say so, don't guess
+        return out
     out["reason"] = "ok"
     return out
 
@@ -431,8 +449,11 @@ def draw_scene(img, r, label=None, col=(255, 255, 255), status=None,
                   (4, 2, "STATE: " + state_name), color=(200, 200, 200),
                   scale=1)
     if label:
-        draw_safe(img.draw_string, ((4, 16, label),), (4, 16, label),
-                  color=col, scale=3)
+        # BIG answer across the top of the picture, roughly centred
+        tw = 24 * len(label)               # scale-4 text is about 24px a letter
+        tx = max(2, (320 - tw) // 2)
+        draw_safe(img.draw_string, ((tx, 14, label),), (tx, 14, label),
+                  color=col, scale=4)
     elif status:
         draw_safe(img.draw_string, ((4, 16, status),), (4, 16, status),
                   color=(255, 255, 0), scale=1)
@@ -479,12 +500,11 @@ while True:
             draw_scene(img, r, None, (255, 255, 255),
                        REASON_TEXT.get(r["reason"], "EMPTY"),
                        "CALIBRATE", total, clock.fps())
-        an = "%.0f" % r["a_near"] if r["a_near"] is not None else "-"
-        af = "%.0f" % r["a_far"] if r["a_far"] is not None else "-"
-        print("CALIB %-26s score=%+.2f near=%s far=%s spread=%+.1f "
-              "red=%.0f dist=%d tilt=%d fps=%.0f"
-              % (REASON_TEXT.get(r["reason"], "OK"), score, an, af,
-                 r["spread"], r["red"], r["dist"], r["tilt"], clock.fps()))
+        print("CALIB %-24s score=%+.2f | thick %d vs %d (%+.2f) | "
+              "red %+.2f | tilt=%d fps=%.0f"
+              % (REASON_TEXT.get(r["reason"], "OK"), score,
+                 r["o_near"], r["o_far"], r["s_width"], r["s_red"],
+                 r["tilt"], clock.fps()))
         continue
 
     # ------------------------------ WAIT ------------------------------
