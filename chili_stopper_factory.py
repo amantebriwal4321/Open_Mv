@@ -60,7 +60,11 @@ CALIBRATE     = True     # True = numbers only, pins stay off
 DEBUG         = True     # True = show the boxes; False = show only STEM/CHILLI
 
 # The part of the picture holding the channel (x, y, width, height).
-CHANNEL_ROI   = (0, 40, 320, 170)
+# IMPORTANT: keep this to the BRIGHT METAL CHANNEL ONLY.  Anything dark just
+# outside it (wood, table, shadows) would otherwise be mistaken for a chili,
+# because the chili is found by being darker than what surrounds it.
+# Watch the magenta box and nudge these numbers until it hugs the channel.
+CHANNEL_ROI   = (90, 0, 130, 240)
 # Which edge of that box the STOPPER is on, as seen on the screen.
 # CHECK ON SCREEN: the cyan box must sit on the end of the chili touching the
 # stopper.  Wrong side = every answer inverted, with no error shown.
@@ -305,12 +309,19 @@ def find_chili(img, obj_thrs):
         if tilt > MAX_TILT_DEG:            # not lying along the channel
             continue
         E_stop, E_far, dist = pick_stopper_end(E0, E1)
-        # prefer straight-along-the-channel and close to the stopper,
-        # NOT simply the biggest thing in view
-        cost = tilt + 0.30 * max(0, dist)
+        rect = (_get(b, "x"), _get(b, "y"), _get(b, "w"), _get(b, "h"))
+
+        # A CHILI IS THE REDDEST THING IN THE CHANNEL.  Grey background
+        # streaks, shadows and table edges have almost no redness, so this is
+        # what stops the camera locking onto them.  It is still relative - we
+        # simply take the reddest candidate, with no fixed colour range.
+        red = region_redness(img, rect, obj_thrs)
+        if red is None:
+            red = -50.0
+        # lower cost wins: mostly redness, then straightness, then nearness
+        cost = -red + 0.10 * tilt + 0.05 * max(0, dist)
         if best_cost is None or cost < best_cost:
-            rect = (_get(b, "x"), _get(b, "y"), _get(b, "w"), _get(b, "h"))
-            best = (E_stop, E_far, width, dist, rect, tilt)
+            best = (E_stop, E_far, width, dist, rect, tilt, red)
             best_cost = cost
     return best
 
@@ -331,14 +342,14 @@ def look(img, obj_thrs):
     """
     out = {"reason": "empty", "score": 0.0, "a_near": None, "a_far": None,
            "spread": 0.0, "boxes": [], "rect": None, "E_stop": None,
-           "E_far": None, "dist": -1, "tilt": -1}
+           "E_far": None, "dist": -1, "tilt": -1, "red": 0.0}
 
     found = find_chili(img, obj_thrs)
     if found is None:
         return out
-    E_stop, E_far, width, dist, rect, tilt = found
+    E_stop, E_far, width, dist, rect, tilt, red = found
     out["E_stop"], out["E_far"] = E_stop, E_far
-    out["dist"], out["rect"], out["tilt"] = dist, rect, tilt
+    out["dist"], out["rect"], out["tilt"], out["red"] = dist, rect, tilt, red
 
     boxes = end_boxes(E_stop, E_far, width)
     out["boxes"] = list(boxes)
@@ -378,45 +389,70 @@ REASON_TEXT = {"empty": "EMPTY", "not_at_stopper": "NOT AT STOPPER",
                "no_read": "CANNOT SEE CHILI CLEARLY",
                "no_contrast": "CANNOT TELL - ENDS LOOK THE SAME"}
 
-def draw_scene(img, r, label=None, col=(255, 255, 255), status=None):
-    """Normally just the word on the chili.  DEBUG adds the working boxes."""
+def draw_scene(img, r, label=None, col=(255, 255, 255), status=None,
+               state_name="", total=0, fps=0.0):
+    """Screen layout:
+         line 1  STATE: <what it is doing>
+         line 2  BIG WORD  -  STEM -> P0   or   CHILLI -> P1
+         a box around the chili it locked onto, and an arrow along it
+         bottom  FPS and how many chilies have been decided
+       DEBUG adds the channel box and the two measuring boxes."""
+    # --- the chili it is actually looking at ---
+    if r["rect"]:
+        draw_safe(img.draw_rectangle, (r["rect"],), r["rect"],
+                  color=col if label else (160, 160, 160), thickness=2)
+
     if DEBUG:
         draw_safe(img.draw_rectangle, (CHANNEL_ROI,), CHANNEL_ROI,
                   color=(255, 0, 255), thickness=1)
         for i, bx in enumerate(r["boxes"]):
             c = (0, 255, 255) if i == 0 else (140, 140, 140)   # cyan = stopper
             draw_safe(img.draw_rectangle, (bx,), bx, color=c, thickness=2)
-        if r["E_stop"] and r["E_far"]:
-            a = (int(r["E_stop"][0]), int(r["E_stop"][1]))
-            c2 = (int(r["E_far"][0]), int(r["E_far"][1]))
-            draw_safe(img.draw_line, ((a[0], a[1], c2[0], c2[1]),),
-                      (a[0], a[1], c2[0], c2[1]), color=(0, 255, 0),
-                      thickness=1)
 
-    # the answer, written big on the chili at the end that arrived first
-    if label and r["E_stop"]:
-        ex, ey = int(r["E_stop"][0]), int(r["E_stop"][1])
-        tw = 24 * len(label)                 # scale-3 text is ~24px per char
-        tx = min(max(2, ex - tw // 2), 320 - tw - 2)
-        ty = ey - 34 if ey > 40 else ey + 14
-        ty = min(max(2, ty), 240 - 26)
-        draw_safe(img.draw_string, ((tx, ty, label),), (tx, ty, label),
+    # --- arrow along the chili, pointing at the end that arrived first ---
+    if label and r["E_stop"] and r["E_far"]:
+        sx, sy = int(r["E_stop"][0]), int(r["E_stop"][1])
+        fx, fy = int(r["E_far"][0]), int(r["E_far"][1])
+        draw_safe(img.draw_line, ((fx, fy, sx, sy),), (fx, fy, sx, sy),
+                  color=col, thickness=2)
+        dx, dy = sx - fx, sy - fy
+        L = math.sqrt(dx*dx + dy*dy) or 1.0
+        ux, uy = dx / L, dy / L
+        px, py = -uy, ux
+        for s in (1, -1):
+            hx = int(sx - 14*ux + s*8*px)
+            hy = int(sy - 14*uy + s*8*py)
+            draw_safe(img.draw_line, ((hx, hy, sx, sy),), (hx, hy, sx, sy),
+                      color=col, thickness=2)
+
+    # --- text: state, then the big answer ---
+    if state_name:
+        draw_safe(img.draw_string, ((4, 2, "STATE: " + state_name),),
+                  (4, 2, "STATE: " + state_name), color=(200, 200, 200),
+                  scale=1)
+    if label:
+        draw_safe(img.draw_string, ((4, 16, label),), (4, 16, label),
                   color=col, scale=3)
-
-    # small note in the corner only when there is NO answer, so a silent
-    # failure can still be understood
-    if status:
-        draw_safe(img.draw_string, ((4, 4, status),), (4, 4, status),
+    elif status:
+        draw_safe(img.draw_string, ((4, 16, status),), (4, 16, status),
                   color=(255, 255, 0), scale=1)
+
+    # --- counters along the bottom ---
+    draw_safe(img.draw_string, ((4, 224, "FPS %d  |  TOTAL %d" % (fps, total)),),
+              (4, 224, "FPS %d  |  TOTAL %d" % (fps, total)),
+              color=(200, 200, 200), scale=1)
 
 # ============================ STATE MACHINE ===========================
 WAIT, CHECK, LOCKED, CLEARING = 0, 1, 2, 3
+STATE_NAME = {WAIT: "WAITING", CHECK: "CHECKING", LOCKED: "DECIDED",
+              CLEARING: "COOLDOWN"}
 state = WAIT
 t_state = time.ticks_ms()
 hold_answer, hold_n = None, 0
 final = None
 empty = 0
 pulse_until = 0
+total = 0                                  # how many chilies decided so far
 
 while True:
     clock.tick()
@@ -437,17 +473,18 @@ while True:
         service_leds(live)
         if live:
             col = (0, 150, 255) if live == "STEM" else (0, 255, 0)
-            draw_scene(img, r, NAME[live], col)
-            status = None
+            lbl = "%s -> %s" % (NAME[live], "P0" if live == "STEM" else "P1")
+            draw_scene(img, r, lbl, col, None, "CALIBRATE", total, clock.fps())
         else:
             draw_scene(img, r, None, (255, 255, 255),
-                       REASON_TEXT.get(r["reason"], "EMPTY"))
+                       REASON_TEXT.get(r["reason"], "EMPTY"),
+                       "CALIBRATE", total, clock.fps())
         an = "%.0f" % r["a_near"] if r["a_near"] is not None else "-"
         af = "%.0f" % r["a_far"] if r["a_far"] is not None else "-"
         print("CALIB %-26s score=%+.2f near=%s far=%s spread=%+.1f "
-              "dist=%d tilt=%d fps=%.0f"
+              "red=%.0f dist=%d tilt=%d fps=%.0f"
               % (REASON_TEXT.get(r["reason"], "OK"), score, an, af,
-                 r["spread"], r["dist"], r["tilt"], clock.fps()))
+                 r["spread"], r["red"], r["dist"], r["tilt"], clock.fps()))
         continue
 
     # ------------------------------ WAIT ------------------------------
@@ -472,6 +509,7 @@ while True:
             if hold_n >= STABLE_N or (elapsed >= MAX_WAIT_MS and hold_answer):
                 final = hold_answer
                 set_outputs(final)
+                total += 1
                 pulse_until = time.ticks_add(now, PULSE_MS)
                 state, t_state = LOCKED, now
                 print(">>> %s ARRIVED FIRST -> %s HIGH (3.3V)  ==> %s   "
@@ -502,14 +540,18 @@ while True:
                 state, t_state = WAIT, now
 
     # ---------------------------- overlay -----------------------------
+    sname = STATE_NAME.get(state, "")
     if state in (LOCKED, CLEARING) and final:
         col = (0, 150, 255) if final == "STEM" else (0, 255, 0)
-        draw_scene(img, r, NAME[final], col)
+        lbl = "%s -> %s" % (NAME[final], "P0" if final == "STEM" else "P1")
+        draw_scene(img, r, lbl, col, None, sname, total, clock.fps())
         service_leds(final)
     elif state == CHECK:
-        draw_scene(img, r, "?", (255, 255, 0))
+        draw_scene(img, r, None, (255, 255, 0), "CHECKING...", sname,
+                   total, clock.fps())
         service_leds(None)
     else:
         draw_scene(img, r, None, (255, 255, 255),
-                   REASON_TEXT.get(r["reason"], "WAITING"))
+                   REASON_TEXT.get(r["reason"], "WAITING"), sname,
+                   total, clock.fps())
         service_leds(None)
