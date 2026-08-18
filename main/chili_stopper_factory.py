@@ -495,6 +495,8 @@ def draw_scene(img, r, label=None, col=(0, 255, 0), status=None,
     except Exception:
         pass
 
+    draw_str(img, 12, 10, text_to_show, color=text_color, scale=2)
+
     # 5. Score & FPS Subtitle
     if label:
         info_line = "OUTPUT LATCHED (3.3V) | %d FPS" % int(fps)
