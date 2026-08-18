@@ -19,20 +19,20 @@ CHANNEL_ROI   = (245, 50, 42, 145)
 STOPPER_SIDE  = "bottom"         # Stopper is at the bottom of the screen
 
 # ---- finding the chili (darkness & shape) ----
-DARK_K        = 0.45             # Dynamic threshold sensitivity against white channel
+DARK_K        = 0.50             # Dynamic threshold sensitivity against white channel
 DARK_L_MIN    = 10
-DARK_L_MAX    = 75
-MIN_CHILI_STD = 5.5              # Empty bare metal channel has uniform brightness (std < 5.0)
+DARK_L_MAX    = 52               # Caps threshold so ambient shadows (L > 55) on aluminum are ignored
+MIN_CHILI_STD = 6.5              # Empty bare metal channel has uniform brightness (std < 6.0)
 
 # ---- shape filters (tuned for all sizes of dried chillies) ----
-MIN_AREA      = 100
+MIN_AREA      = 180              # Ignore small shadow specks / noise
 MAX_AREA      = 35000
 MIN_ASPECT    = 1.1
 MAX_ASPECT    = 16.0
 MAX_WIDTH_PX  = 65
 MAX_TILT_DEG  = 85
 EXTENT_MIN    = 0.10
-MIN_LEN       = 14
+MIN_LEN       = 18
 MAX_LEN       = 320
 BLOB_MARGIN   = 2                # Keep tight to chili body (do NOT merge with far shadows)
 
@@ -236,6 +236,15 @@ def find_chili(img, obj_thrs):
         if not shape_ok(b):
             continue
         rect = (_get(b, "x"), _get(b, "y"), _get(b, "w"), _get(b, "h"))
+        
+        # Darkness check: a real dried chili is dark (L <= 55), aluminum shadow is bright (L > 58)
+        try:
+            st_b = img.get_statistics(roi=rect)
+            if _stat(st_b, "l_mean", 100.0) > 55.0:
+                continue
+        except Exception:
+            pass
+
         red = region_redness(img, rect, obj_thrs) or 0.0
 
         scan["shape"] += 1
