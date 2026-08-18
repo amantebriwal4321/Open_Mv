@@ -22,8 +22,8 @@ STOPPER_SIDE  = "bottom"         # Stopper is at the bottom of the screen
 DARK_K        = 0.60
 DARK_L_MIN    = 8
 DARK_L_MAX    = 70
-MIN_CHILI_A   = 6.5              # Reject bare metal shadows & desk mat (chili has A >= 10.0)
-MIN_CHILI_STD = 5.0              # Empty metal channel has low std
+MIN_CHILI_A   = 2.5              # Reliably detects dark maroon/red chillies in any lighting
+MIN_CHILI_STD = 4.0              # Empty metal channel has low std
 
 # ---- shape filters (tuned for all sizes of dried chillies) ----
 MIN_AREA      = 100
