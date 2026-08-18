@@ -18,12 +18,11 @@ DEBUG         = True     # True = show detection boxes & tags
 CHANNEL_ROI   = (245, 50, 42, 145)
 STOPPER_SIDE  = "bottom"         # Stopper is at the bottom of the screen
 
-# ---- finding the chili (darkness & color) ----
-DARK_K        = 0.60
-DARK_L_MIN    = 8
-DARK_L_MAX    = 70
-MIN_CHILI_A   = 2.5              # Reliably detects dark maroon/red chillies in any lighting
-MIN_CHILI_STD = 4.0              # Empty metal channel has low std
+# ---- finding the chili (darkness & shape) ----
+DARK_K        = 0.45             # Dynamic threshold sensitivity against white channel
+DARK_L_MIN    = 10
+DARK_L_MAX    = 75
+MIN_CHILI_STD = 4.0              # Empty bare metal channel has uniform brightness (std < 4.0)
 
 # ---- shape filters (tuned for all sizes of dried chillies) ----
 MIN_AREA      = 100
@@ -53,7 +52,7 @@ MIN_SCORE     = 0.05
 STOPPER_GAP_MAX_PX = 9999
 DECIDE_MIN     = 0.15
 STABLE_N       = 3               # Fast 3-frame confirmation (~75ms)
-CLEAR_FRAMES   = 4               # Wait for chili to leave chute before next cycle
+CLEAR_FRAMES   = 8               # Solid latch: require 8 empty frames before clearing
 MAX_WAIT_MS    = 1500
 
 # ---- outputs ----
@@ -138,11 +137,6 @@ def region_redness(img, roi, obj_thrs):
     if roi[2] < 2 or roi[3] < 2:
         return None
     try:
-        st = img.get_statistics(thresholds=obj_thrs, roi=roi)
-        return _stat(st, "a_mean")
-    except Exception:
-        pass
-    try:
         st = img.get_statistics(roi=roi)
         return _stat(st, "a_mean")
     except Exception:
@@ -155,12 +149,11 @@ def object_threshold(img):
         l_std = _stat(st, "l_stdev", 0.0)
         if l_std <= 0:
             l_std = _stat(st, "l_std", 12.0)
-        a_max = _stat(st, "a_max", 0.0)
     except Exception:
-        l_mean, l_std, a_max = 50.0, 12.0, 0.0
+        l_mean, l_std = 50.0, 12.0
 
-    # If the whole channel has no real red color, it's 100% empty bare metal
-    if a_max < MIN_CHILI_A:
+    # If the channel has almost no brightness contrast, it's empty bare metal
+    if l_std < MIN_CHILI_STD:
         return [(0, 0, 0, 0, 0, 0)], 0
 
     lim = l_mean - DARK_K * l_std
@@ -243,11 +236,7 @@ def find_chili(img, obj_thrs):
         if not shape_ok(b):
             continue
         rect = (_get(b, "x"), _get(b, "y"), _get(b, "w"), _get(b, "h"))
-        
-        # Color verification: reject bare metal shadows
-        red = region_redness(img, rect, obj_thrs)
-        if red is None or red < MIN_CHILI_A:
-            continue
+        red = region_redness(img, rect, obj_thrs) or 0.0
 
         scan["shape"] += 1
         E0, E1, width = axis_ends(b)
@@ -258,7 +247,7 @@ def find_chili(img, obj_thrs):
             continue
         E_stop, E_far, dist = pick_stopper_end(E0, E1)
 
-        cost = -_get(b, "pixels") - 25.0 * red + 0.25 * tilt
+        cost = -_get(b, "pixels") + 0.25 * tilt
         if best_cost is None or cost < best_cost:
             best = (E_stop, E_far, width, dist, rect, tilt, red)
             best_cost = cost
@@ -506,10 +495,11 @@ def draw_scene(img, r, label=None, col=(0, 255, 0), status=None,
     except Exception:
         pass
 
-    draw_str(img, 12, 10, text_to_show, color=text_color, scale=2)
-
     # 5. Score & FPS Subtitle
-    if r["reason"] == "ok":
+    if label:
+        info_line = "OUTPUT LATCHED (3.3V) | %d FPS" % int(fps)
+        draw_str(img, 12, 32, info_line, color=(255, 255, 255), scale=1)
+    elif r["reason"] == "ok":
         info_line = "SCORE: %+.2f | %d FPS" % (r["score"], int(fps))
         draw_str(img, 12, 32, info_line, color=(255, 255, 255), scale=1)
     else:
