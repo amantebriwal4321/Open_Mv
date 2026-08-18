@@ -22,7 +22,7 @@ STOPPER_SIDE  = "bottom"         # Stopper is at the bottom of the screen
 DARK_K        = 0.45             # Dynamic threshold sensitivity against white channel
 DARK_L_MIN    = 10
 DARK_L_MAX    = 75
-MIN_CHILI_STD = 4.0              # Empty bare metal channel has uniform brightness (std < 4.0)
+MIN_CHILI_STD = 5.5              # Empty bare metal channel has uniform brightness (std < 5.0)
 
 # ---- shape filters (tuned for all sizes of dried chillies) ----
 MIN_AREA      = 100
@@ -262,28 +262,30 @@ def end_boxes(E_stop, E_far, width):
             clamp_roi(far[0] - side/2.0, far[1] - side/2.0, side, side))
 
 def check_stalk(img, E_stop, E_far, width, rect):
-    """Detect if a pale stalk extends beyond the chili body across the chute width."""
+    """Detect if a pale organic stalk (tan/green/yellow) extends beyond the chili body."""
     if not rect:
         return 0.0
     bx, by, bw, bh = rect
     cx, cy, cw, ch = CHANNEL_ROI
 
-    # Region on the chute towards the stopper (below the body)
-    h_near = min(45, max(0, (cy + ch) - (by + bh)))
+    # Region below body towards stopper (exclude the bottom steel bracket lip)
+    max_y_near = min(cy + ch - 12, by + bh + 45)
+    h_near = max(0, max_y_near - (by + bh))
     roi_near = clamp_roi(cx, by + bh, cw, h_near)
 
-    # Region on the chute away from stopper (above the body)
+    # Region above body away from stopper
     h_far = min(45, max(0, by - cy))
     roi_far = clamp_roi(cx, max(cy, by - h_far), cw, h_far)
 
-    # Stalk detection threshold: darker than white channel (L <= 78) or warm color (A>=4 or B>=4)
-    stalk_thrs = [(0, 78, -128, 127, -128, 127), (0, 92, 4, 127, 4, 127)]
+    # Organic stalk threshold: Warm/colored plant material (tan/yellow/green/brown)
+    # Rejects cold neutral steel shadows & black brackets
+    stalk_thrs = [(35, 88, -25, 45, 4, 60), (30, 85, 3, 50, -20, 50)]
     px_near = count_px(img, roi_near, stalk_thrs)
     px_far = count_px(img, roi_far, stalk_thrs)
 
-    if px_near >= 12 and px_near > px_far * 1.4:
+    if px_near >= 10 and px_near > px_far * 1.5:
         return 1.0   # Stalk extends towards stopper -> STEM at stopper!
-    elif px_far >= 12 and px_far > px_near * 1.4:
+    elif px_far >= 10 and px_far > px_near * 1.5:
         return -1.0  # Stalk extends away from stopper -> APEX at stopper!
     return 0.0
 
@@ -314,10 +316,10 @@ def look(img, obj_thrs):
         out["reason"] = "no_read"
         return out
 
-    # Thickness comparison (fat = stem shoulder, thin = apex tip)
+    # 1. Thickness comparison (wide calyx shoulder vs pointed tip)
     s_width = (o_near - o_far) / float(o_near + o_far)
 
-    # Redness comparison (apex is deep red, stem has calyx)
+    # 2. Redness comparison
     a_near = region_redness(img, boxes[0], obj_thrs)
     a_far = region_redness(img, boxes[1], obj_thrs)
     if a_near is not None and a_far is not None:
@@ -328,15 +330,15 @@ def look(img, obj_thrs):
     else:
         s_red = 0.0
 
-    # Stalk presence check beyond the body across full chute width
+    # 3. Organic stalk presence beyond body
     s_stalk = check_stalk(img, E_stop, E_far, width, rect)
     out["s_stalk"] = s_stalk
 
-    # Combined score
+    # Combined decision: Balanced between shape taper & organic stalk
     if s_stalk != 0.0:
-        score = 0.85 * s_stalk + 0.15 * s_width
+        score = 0.60 * s_stalk + 0.40 * s_width
     else:
-        score = 0.65 * s_width + 0.35 * s_red
+        score = 0.70 * s_width + 0.30 * s_red
 
     out["s_width"], out["s_red"] = s_width, s_red
     out["score"] = score
