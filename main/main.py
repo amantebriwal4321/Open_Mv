@@ -14,8 +14,8 @@ from pyb import Pin, LED
 CALIBRATE     = False    # False = factory production mode (latch decision & hold power until next chili)
 DEBUG         = True     # True = show detection boxes & tags
 
-# White channel region (calibrated to the metal chute in the camera view)
-CHANNEL_ROI   = (245, 50, 42, 145)
+# White channel region (calibrated strictly inside the metal chute)
+CHANNEL_ROI   = (250, 50, 26, 145)
 STOPPER_SIDE  = "bottom"         # Stopper is at the bottom of the screen
 
 # ---- finding the chili (darkness & shape) ----
