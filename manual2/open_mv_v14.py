@@ -1,21 +1,7 @@
 # open_mv2.py  —  OpenMV Cam H7 Plus
 # ==================================================================================
-#  VERSION 15     (bumped every time the code changes - check this first)
+#  VERSION 14     (bumped every time the code changes - check this first)
 #  Successor to chili_stopper_factory.py.
-# ----------------------------------------------------------------------------------
-#  v15 FIXED APEX-ONLY BIAS VIA MASS CENTROID SHIFT & BALANCED ENSEMBLE.
-#      In v14, check_stalk searched for any pixels L <= lim + 22. Bare chute metal
-#      and shadow at the far (top) end easily matched this (L~65-75), while the
-#      near box at the stopper was clipped. This caused d_far > d_near * 1.5 to
-#      fire constantly, forcing s_stalk = -1.0 (APEX) with 70% decision weight.
-#      Fixed by:
-#      1. Mass Centroid Shift (W_CENTROID=1.5): Compares the blob's center of mass
-#         (b.cx(), b.cy()) against its geometric axis midpoint. The bulky stem end
-#         shifts the center of mass towards the stem side. Perfectly symmetric.
-#      2. True Body Inspection (END_INSET=0.25): Samples the thick shoulder vs
-#         tapered tail (not off the tips), so s_width reflects true body taper.
-#      3. Stalk Gate Fixed: Stalk search strictly rejects bare bright metal,
-#         and W_STALK reduced from 0.70 to 0.40 as an auxiliary clue.
 # ----------------------------------------------------------------------------------
 #  v14 Back to a FIXED narrow box, but positioned in the middle of the view
 #      where the channel now is: CHANNEL_ROI = (186, 50, 36, 160).
@@ -122,11 +108,13 @@
 #      APEX at stopper -> P1 high (3.3V), GREEN LED, screen says APEX
 #      P2 = rotate 180 command, for whichever case is set in ROTATE_ON
 #
-#  HOW IT DECIDES - ensemble voting across four symmetrical clues:
-#    1) CENTROID Center of mass shift along axis (bulky stem shifts centroid)
-#    2) WIDTH    Shoulder density vs tapering tail density
-#    3) REDNESS  Pale stem end vs rich red apex
-#    4) STALK    Pale peduncle extending past end (auxiliary)
+#  HOW IT DECIDES - three clues, all RELATIVE, none using a fixed colour range
+#    1) STALK   pale stalk sticking out beyond one end = that end is the stem.
+#               Strongest clue when the stalk is visible.
+#    2) WIDTH   the stem end of the body is fat and blunt; the apex tapers.
+#    3) REDNESS the stem end is the paler end.
+#    They must agree; if the stalk and width clues contradict each other the
+#    score is halved so the answer needs more frames before it locks.
 #
 #  P0/P1/P2 give 3.3V ~25mA -> PLC input or relay module only, never a cylinder.
 # ==================================================================================
@@ -143,7 +131,7 @@ DEBUG         = True     # True = show detection boxes
 # ignored completely, so THE CHILI MUST LIE INSIDE THIS BOX or nothing works.
 # It is drawn on screen in MAGENTA.
 #   (x, y, width, height)   picture is 320 wide, 240 tall
-# Set to the vertical chute: x 186-222, y 50-210.
+# Now set to the MIDDLE of the view: x 90-230, y 60-180.
 CHANNEL_ROI   = (186, 50, 36, 160)
 #                x    y   w    h
 # A NARROW box sitting on the white channel only.  It must NOT take in any of
@@ -153,9 +141,18 @@ CHANNEL_ROI   = (186, 50, 36, 160)
 #   box too far RIGHT -> lower it              (186 -> 176)
 #   box too short     -> raise the fourth number (160 -> 180)
 
+# AUTO_CHANNEL: find the bright metal channel by itself, every frame.
+# The channel is the brightest thing in view; the chili is the dark thing
+# lying in it.  So the camera looks for the bright strip first and searches
+# for the chili only inside it.  This removes the hand-measured box that has
+# been the cause of most wrong answers - if the box is not exactly on the
+# channel it locks onto the mat or the table instead, which are also darker
+# than the channel.
+# Set to False to go back to the fixed CHANNEL_ROI above.
 AUTO_CHANNEL  = False
-CH_MIN_PIX    = 600
-CH_INSET      = 2
+CH_MIN_PIX    = 600      # a bright strip smaller than this is not the channel
+CH_INSET      = 2        # trim this many pixels off the found strip, so the
+                         # bright edge of the channel is not counted
 
 # Which edge of that box the stopper is on.
 #   chili lies UP-AND-DOWN in the picture -> "top" or "bottom"
@@ -165,13 +162,30 @@ CH_INSET      = 2
 STOPPER_SIDE  = "bottom"
 
 # ---- finding the chili: DARKNESS ONLY, never colour ----
+# Colour cannot answer "is this a chili".  A pink cloth reads A = 20-40 while a
+# dark dried chili reads A = 4-8, so ANY redness threshold that accepts real
+# chilies also accepts brighter-coloured things, and any threshold that rejects
+# them also rejects half the crop.  What is reliable: an EMPTY metal channel is
+# uniformly bright, and a chili is a DARK region in it.  That holds for red,
+# brown and almost-black chilies equally.
+# ===================== THE ONE NUMBER TO ADJUST =======================
 # Brightness runs 0 (black) to 100 (white).  The channel metal is bright,
 # a chili is dark.  This is the dividing line between them:
 #     anything DARKER than the line = chili;  brighter = channel.
 #
 #   MANUAL_L = None   -> AUTOMATIC.  The camera measures the line itself from
 #                        every frame, so it follows the lighting on its own.
-#   MANUAL_L = 58     -> MANUAL.  The line is fixed at 58 and never moves.
+#                        Use this while the lighting is still being set up.
+#
+#   MANUAL_L = 45     -> MANUAL.  The line is fixed at 45 and never moves.
+#                        Same picture always gives the same answer.  Use this
+#                        in production, once the light is fixed and enclosed.
+#
+# HOW TO FIND YOUR NUMBER: run in AUTO with a chili in the channel and read
+# "L<=NN" on the screen.  That NN is what automatic is choosing.  Put that
+# number here, switch to manual, and check it still works.
+#   Chili not being seen  -> RAISE the number (more counts as dark)
+#   Shadows being counted -> LOWER the number (less counts as dark)
 MANUAL_L      = None
 
 DARK_K        = 0.60     # AUTO only: how far below average counts as dark
@@ -194,26 +208,28 @@ MAX_LEN       = 320
 BLOB_MARGIN   = 14
 
 # ---- measuring boxes on both ends ----
-END_INSET     = 0.25     # sample at 25% along the body (true shoulder vs tail)
+END_INSET     = 0.18
 END_BOX_MIN   = 8
 END_BOX_MAX   = 46
 MIN_BOX_OBJ   = 10
-MIN_BOX_AREA  = 30       # a box smaller than this is ignored
+MIN_BOX_AREA  = 40       # a box smaller than this (clipped by the frame edge)
+                         # is not trustworthy and is reported instead of used
 
 # ---- stalk check ----
-STALK_REACH   = 20       # how far beyond each end to look, in pixels
-STALK_BOX     = 22       # size of the box it looks in
-STALK_MIN_DENS = 0.04    # least stalk density that counts as "something there"
+STALK_REACH   = 22       # how far beyond each end to look, in pixels
+STALK_BOX     = 24       # size of the box it looks in
+STALK_L_MARGIN = 22      # stalk is darker than metal but paler than the body:
+                         # allowed up to (body limit + this), worked out per frame
+STALK_MIN_DENS = 0.035   # least stalk density that counts as "something there"
 STALK_RATIO   = 1.5      # one side must beat the other by this much
 
 # ---- decision weights ----
-W_CENTROID    = 1.5      # Geometric mass center shift (most robust & symmetric)
-W_WIDTH       = 1.2      # Body density / thickness difference
-W_RED         = 0.6      # Pale stem end vs rich red apex
-W_STALK       = 0.4      # Pale stalk extending past end
+W_STALK       = 0.70     # share of the score given to the stalk clue when seen
+W_WIDTH       = 1.6
+W_RED         = 1.0
 A_FULL        = 12.0
 MIN_SCORE     = 0.05
-DISAGREE_MULT = 0.6      # geometric clues contradict -> reduce confidence
+DISAGREE_MULT = 0.5      # stalk and width clues contradict -> halve confidence
 
 # ---- rules ----
 STOPPER_GAP_MAX_PX = 9999
@@ -302,7 +318,10 @@ def count_px(img, roi, thrs):
         return 0
 
 def density(img, roi, thrs):
-    """Matching pixels per unit area."""
+    """Matching pixels per unit area.
+    Boxes at the frame edge get CLIPPED, so a raw count from a small box loses
+    against a full-size one.  The stopper end sits at the edge by definition,
+    so raw counts biased every decision.  Density removes that completely."""
     area = roi[2] * roi[3]
     if area < MIN_BOX_AREA:
         return None
@@ -322,14 +341,61 @@ def region_redness(img, roi, obj_thrs):
     except Exception:
         return None
 
+def find_channel(img):
+    """Locate the bright metal channel in the picture.
+
+    The channel is the brightest large object in view.  Finding it each frame
+    means the camera does not depend on someone measuring a box by hand and
+    typing coordinates in - and it follows the channel if the camera is
+    nudged.  Returns a box, or None if no convincing bright strip is found."""
+    try:
+        st = img.get_statistics()
+        l_mean = _stat(st, "l_mean", 50.0)
+        l_std = _stat(st, "l_stdev", 0.0)
+        if l_std <= 0:
+            l_std = _stat(st, "l_std", 12.0)
+    except Exception:
+        l_mean, l_std = 50.0, 12.0
+
+    # "bright" = clearly above the average of the whole picture
+    lim = min(95, max(45, l_mean + 0.7 * l_std))
+    thrs = [(int(lim), 100, -128, 127, -128, 127)]
+    try:
+        blobs = img.find_blobs(thrs, pixels_threshold=CH_MIN_PIX,
+                               area_threshold=CH_MIN_PIX, merge=True)
+    except Exception:
+        return None
+
+    best, best_px = None, 0
+    for b in blobs:
+        bw, bh, px = _get(b, "w"), _get(b, "h"), _get(b, "pixels")
+        if bw < 10 or bh < 10:
+            continue
+        if px > best_px:                   # the biggest bright region wins
+            best_px = px
+            best = (_get(b, "x"), _get(b, "y"), bw, bh)
+    if best is None:
+        return None
+    x, y, w, h = best
+    return clamp_roi(x + CH_INSET, y + CH_INSET,
+                     w - 2 * CH_INSET, h - 2 * CH_INSET)
+
 def object_threshold(img):
-    """Work out the dividing line between 'chili' (dark) and 'channel' (bright)."""
+    """Work out the dividing line between 'chili' (dark) and 'channel' (bright),
+    and say whether anything is in the channel at all.
+
+    MANUAL mode : the line is the fixed number you typed in.  Same picture
+                  always gives the same answer - what a production machine wants.
+    AUTO mode   : the line is measured from this frame, so it follows the light.
+                  Good while the lighting is still being sorted out."""
     # ---------------- MANUAL: fixed line, fully predictable ----------------
     if MANUAL_L is not None:
         lim = int(min(max(MANUAL_L, 0), 100))
         thrs = [(0, lim, -128, 127, -128, 127)]
+        # "is a chili here?" = enough dots darker than the line.  Deterministic,
+        # unlike the automatic test, which depends on how the frame looks.
         if count_px(img, CHANNEL_ROI, thrs) < MIN_AREA:
-            return None, lim
+            return None, lim               # nothing dark enough: channel empty
         return thrs, lim
 
     # ---------------- AUTO: line measured from this frame ------------------
@@ -342,12 +408,23 @@ def object_threshold(img):
     except Exception:
         l_mean, l_std = 50.0, 12.0
 
+    # Is anything lying in the channel?  An empty metal chute is uniformly
+    # bright, so its brightness spread is small.  Anything in it breaks that up.
+    # No colour is used, so a dark or brown chili is found just as well as a
+    # bright red one - which a redness test could never do.
     if l_std < MIN_CHILI_STD:
         return None, 0                     # empty bare channel
 
     lim = l_mean - DARK_K * l_std
     lim = min(max(lim, DARK_L_MIN), DARK_L_MAX)
     return [(0, int(lim), -128, 127, -128, 127)], int(lim)
+
+def stalk_thresholds(lim):
+    """The stalk is darker than the bright metal but paler than the red body.
+    Derived from the same frame statistics as the body limit, so it follows the
+    light instead of being a fixed number that drifts out of range."""
+    hi = min(100, int(lim) + STALK_L_MARGIN)
+    return [(0, hi, -128, 127, -128, 127), (0, 95, 8, 127, 8, 127)]
 
 def _dist(a, b):
     return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
@@ -404,6 +481,8 @@ def shape_ok(b):
         return False
     return True
 
+# why nothing was found - each counter is a separate reason, so the log says
+# exactly which test threw the chili away
 scan = {"raw": 0, "shape": 0, "colour": 0, "tilt": 0, "best_tilt": -1}
 
 def find_chili(img, obj_thrs):
@@ -428,9 +507,12 @@ def find_chili(img, obj_thrs):
     for b in blobs:
         if not shape_ok(b):
             continue
-        scan["shape"] += 1
+        scan["shape"] += 1                 # passed the shape tests
 
         rect = (_get(b, "x"), _get(b, "y"), _get(b, "w"), _get(b, "h"))
+        # Redness is READ but never used to reject: it only breaks ties between
+        # candidates.  Rejecting on colour is what made a pink cloth pass while
+        # a dark chili was thrown away.
         red = region_redness(img, rect, obj_thrs)
         if red is None:
             red = 0.0
@@ -447,13 +529,17 @@ def find_chili(img, obj_thrs):
         E_stop, E_far, dist = pick_stopper_end(E0, E1)
         cost = -red + 0.25 * tilt + 0.05 * max(0, dist)
         if best_cost is None or cost < best_cost:
-            centroid = (_get(b, "cx"), _get(b, "cy"))
-            best = (E_stop, E_far, width, dist, rect, tilt, red, centroid)
+            best = (E_stop, E_far, width, dist, rect, tilt, red)
             best_cost = cost
     return best
 
 def clip_to_channel(roi):
-    """Trim a measuring box so it cannot reach outside the channel."""
+    """Trim a measuring box so it cannot reach outside the channel.
+
+    This matters most at the STOPPER end, because just beyond it sits the
+    physical stopper bar.  That hardware is dark, so a box allowed to reach
+    past the end found "chili-like" material there on EVERY chili, whichever
+    way round it was - which pushed every answer toward STEM."""
     cx, cy, cw, ch = CHANNEL_ROI
     x0 = max(roi[0], cx)
     y0 = max(roi[1], cy)
@@ -472,7 +558,10 @@ def end_boxes(E_stop, E_far, width):
                                       side, side)))
 
 def check_stalk(img, E_stop, E_far, lim):
-    """Is a pale stalk sticking out beyond one end of the body?"""
+    """Is a pale stalk sticking out beyond one end of the body?
+    Compares DENSITY, not raw counts: the box beyond the stopper end is often
+    clipped by the frame edge, and comparing raw counts made the clipped side
+    lose every time."""
     dx = E_far[0] - E_stop[0]
     dy = E_far[1] - E_stop[1]
     L = math.sqrt(dx*dx + dy*dy) or 1.0
@@ -489,11 +578,14 @@ def check_stalk(img, E_stop, E_far, lim):
     roi_far = clip_to_channel(clamp_roi(fx - half, fy - half,
                                         STALK_BOX, STALK_BOX))
 
-    # Real stalk: slightly paler than dark body, but NOT bright chute metal
-    thrs = [(int(lim), min(92, int(lim) + 16), -20, 20, -10, 40)]
+    thrs = stalk_thresholds(lim)
     d_near = density(img, roi_near, thrs)
     d_far = density(img, roi_far, thrs)
     if d_near is None or d_far is None:
+        # One side has no room left inside the channel - usually the stopper
+        # end, hard against the bar.  With only one side readable there is
+        # nothing to compare, so the stalk clue says nothing rather than
+        # inventing a "stalk" out of the stopper hardware.
         return 0.0
 
     if d_near >= STALK_MIN_DENS and d_near > d_far * STALK_RATIO:
@@ -505,17 +597,16 @@ def check_stalk(img, E_stop, E_far, lim):
 def look(img, obj_thrs, lim):
     out = {"reason": "empty", "score": 0.0, "a_near": None, "a_far": None,
            "spread": 0.0, "boxes": [], "rect": None, "E_stop": None,
-           "E_far": None, "centroid": None, "dist": -1, "tilt": -1, "red": 0.0,
-           "d_near": 0.0, "d_far": 0.0, "s_centroid": 0.0, "s_width": 0.0,
-           "s_red": 0.0, "s_stalk": 0.0, "agree": True}
+           "E_far": None, "dist": -1, "tilt": -1, "red": 0.0,
+           "d_near": 0.0, "d_far": 0.0, "s_width": 0.0, "s_red": 0.0,
+           "s_stalk": 0.0, "agree": True}
 
     found = find_chili(img, obj_thrs)
     if found is None:
         return out
-    E_stop, E_far, width, dist, rect, tilt, red, centroid = found
+    E_stop, E_far, width, dist, rect, tilt, red = found
     out["E_stop"], out["E_far"] = E_stop, E_far
     out["dist"], out["rect"], out["tilt"], out["red"] = dist, rect, tilt, red
-    out["centroid"] = centroid
 
     boxes = end_boxes(E_stop, E_far, width)
     out["boxes"] = list(boxes)
@@ -524,20 +615,7 @@ def look(img, obj_thrs, lim):
         out["reason"] = "not_at_stopper"
         return out
 
-    # 1. CENTROID MASS SHIFT (Geometric clue - immune to glare/color)
-    # The bulky stem end shifts the center of mass towards the stem side.
-    c_mid = ((E_stop[0] + E_far[0]) * 0.5, (E_stop[1] + E_far[1]) * 0.5)
-    dx = E_far[0] - E_stop[0]
-    dy = E_far[1] - E_stop[1]
-    L = math.sqrt(dx*dx + dy*dy) or 1.0
-    ux, uy = dx / L, dy / L
-    proj = (centroid[0] - c_mid[0]) * ux + (centroid[1] - c_mid[1]) * uy
-    # If shifted toward E_stop (mc opposite to u): proj < 0 -> s_centroid > 0 (STEM)
-    # If shifted toward E_far (mc along u): proj > 0 -> s_centroid < 0 (APEX)
-    s_centroid = min(1.0, max(-1.0, -proj / (L * 0.15)))
-    out["s_centroid"] = s_centroid
-
-    # 2. THICKNESS by density in shoulder vs tapered end
+    # THICKNESS by density, so a box clipped at the frame edge cannot skew it
     d_near = density(img, boxes[0], obj_thrs)
     d_far = density(img, boxes[1], obj_thrs)
     if d_near is None or d_far is None or (d_near + d_far) <= 0:
@@ -546,7 +624,7 @@ def look(img, obj_thrs, lim):
     out["d_near"], out["d_far"] = d_near, d_far
     s_width = (d_near - d_far) / (d_near + d_far)
 
-    # 3. REDNESS: the stem end is the paler end
+    # REDNESS: the stem end is the paler end
     a_near = region_redness(img, boxes[0], obj_thrs)
     a_far = region_redness(img, boxes[1], obj_thrs)
     if a_near is not None and a_far is not None:
@@ -558,23 +636,20 @@ def look(img, obj_thrs, lim):
     else:
         s_red, rw = 0.0, 0.0
 
-    # 4. STALK sticking out past one end
+    # STALK sticking out past one end - the strongest clue when it is visible
     s_stalk = check_stalk(img, E_stop, E_far, lim)
     out["s_stalk"] = s_stalk
 
-    # Balanced ensemble voting
-    tot_w = W_CENTROID + W_WIDTH + rw
-    weighted_sum = W_CENTROID * s_centroid + W_WIDTH * s_width + rw * s_red
+    body = (W_WIDTH * s_width + rw * s_red) / (W_WIDTH + rw)
     if s_stalk != 0.0:
-        tot_w += W_STALK
-        weighted_sum += W_STALK * s_stalk
-
-    score = weighted_sum / tot_w
-
-    # Disagreement penalty if primary geometric clues strongly conflict
-    if s_centroid != 0.0 and s_width != 0.0 and (s_centroid > 0) != (s_width > 0):
-        score *= DISAGREE_MULT
-        out["agree"] = False
+        score = W_STALK * s_stalk + (1.0 - W_STALK) * body
+        # if the stalk says one end and the body shape says the other, this
+        # chili is confusing - halve the score so it needs more frames to lock
+        if s_width != 0.0 and (s_stalk > 0) != (s_width > 0):
+            score *= DISAGREE_MULT
+            out["agree"] = False
+    else:
+        score = body
 
     out["s_width"], out["s_red"] = s_width, s_red
     out["score"] = score
@@ -591,6 +666,7 @@ REASON_TEXT = {"empty": "EMPTY", "not_at_stopper": "NOT AT STOPPER",
                "no_read": "CANNOT SEE CHILI CLEARLY",
                "no_contrast": "CANNOT TELL - ENDS LOOK THE SAME"}
 
+# 5x7 bitmap font for bulletproof text display across all OpenMV firmware versions
 FONT_5x7 = {
     'A': (0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11),
     'B': (0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e),
@@ -642,6 +718,8 @@ FONT_5x7 = {
 }
 
 def draw_str(img, x, y, text, color=(255, 255, 255), scale=2):
+    """Draw text, trying the firmware's own call first and falling back to a
+    hand-drawn font if this build refuses both signatures."""
     s = str(text)
     ix, iy = int(x), int(y)
     sc = int(scale)
@@ -680,6 +758,10 @@ def draw_str(img, x, y, text, color=(255, 255, 255), scale=2):
 def draw_scene(img, r, label=None, col=(0, 255, 0), status=None,
                state_name="", total=0, fps=0.0, shown_score=None,
                shown_lim=0):
+    """On-screen HUD: what is at the stopper, and which pin is being driven.
+    shown_score: once an answer is LOCKED, pass the score it was locked on.
+    Showing the live score there made the HUD contradict itself - the label
+    said STEM while the number underneath had already drifted negative."""
     if DEBUG:
         try:
             img.draw_rectangle(CHANNEL_ROI, color=(255, 0, 255), thickness=1)
@@ -697,17 +779,6 @@ def draw_scene(img, r, label=None, col=(0, 255, 0), status=None,
             img.draw_rectangle(r["rect"], color=(0, 255, 0), thickness=2)
         except Exception:
             pass
-
-    # Draw centroid circle in yellow
-    if r.get("centroid"):
-        cx, cy = int(r["centroid"][0]), int(r["centroid"][1])
-        try:
-            img.draw_circle(cx, cy, 3, color=(255, 255, 0), thickness=2)
-        except Exception:
-            try:
-                img.draw_rectangle((cx-2, cy-2, 4, 4), color=(255, 255, 0), fill=True)
-            except Exception:
-                pass
 
     # arrow along the chili, pointing at the end that arrived first
     if r["E_stop"] and r["E_far"] and r["reason"] == "ok":
@@ -747,10 +818,12 @@ def draw_scene(img, r, label=None, col=(0, 255, 0), status=None,
 
     draw_str(img, 12, 10, text_to_show, color=text_color, scale=2)
 
+    # The dividing line is always shown.  In AUTO this is the number to write
+    # down and copy into MANUAL_L; in MANUAL it confirms your number is in use.
     mode = "SET" if MANUAL_L is not None else "AUTO"
     tail = "L<=%d %s | %d FPS" % (shown_lim, mode, int(fps))
 
-    if shown_score is not None:
+    if shown_score is not None:            # a locked answer: show ITS score
         draw_str(img, 12, 32, "SCORE %+.2f | %s" % (shown_score, tail),
                  color=(255, 255, 255), scale=1)
     elif r["reason"] == "ok":
@@ -769,7 +842,7 @@ state = WAIT
 t_state = time.ticks_ms()
 hold_answer, hold_n = None, 0
 final = None
-final_score = 0.0
+final_score = 0.0                # the score the locked answer was decided on
 empty = 0
 pulse_until = 0
 total = 0
@@ -777,6 +850,13 @@ total = 0
 vote_history = []
 
 def smooth_score(s):
+    """Average of the last few frames' SCORES.
+
+    Earlier this smoothed the LABEL instead, which let the shown number and the
+    shown answer contradict each other - the log printed
+    'STEM ... (score=-0.37)', because the 5-frame majority still said STEM
+    while this frame's number had gone negative.  Averaging the score itself
+    means the answer is always the sign of the number you are looking at."""
     global vote_history
     if s is None:
         if len(vote_history) > 0:
@@ -796,6 +876,13 @@ while True:
     now = time.ticks_ms()
     img = sensor.snapshot()
 
+    # Find the bright channel first, and look for the chili only inside it.
+    # Assigning CHANNEL_ROI here updates it for every function below.
+    if AUTO_CHANNEL:
+        found_ch = find_channel(img)
+        if found_ch is not None and found_ch[2] > 8 and found_ch[3] > 8:
+            CHANNEL_ROI = found_ch
+
     obj_thrs, lim = object_threshold(img)
     r = look(img, obj_thrs, lim)
     present = (r["reason"] == "ok")
@@ -803,16 +890,19 @@ while True:
         present = False
     score = r["score"]
 
+    # smoothed answer, used by BOTH modes
+    # ONE number drives everything: the smoothed score.  The answer is simply
+    # its sign, so the label on screen can never disagree with the number.
     avg = smooth_score(score if present else None)
     if avg is None:
         live = None
     else:
         live = "STEM" if avg > 0 else "POD"
-        score = avg
+        score = avg                        # show and decide on the same value
 
     # ---------------------------- CALIBRATE ---------------------------
     if CALIBRATE:
-        set_outputs(None)
+        set_outputs(None)                  # pins stay OFF while tuning
         service_leds(live)
         if live:
             col = (0, 150, 255) if live == "STEM" else (0, 255, 0)
@@ -830,11 +920,11 @@ while True:
                   % (scan["raw"], scan["shape"], scan["colour"], scan["tilt"],
                      scan["best_tilt"], lim, clock.fps()))
         else:
-            print("CALIB %-24s score=%+.2f | cent %+.2f | dens %.3f vs %.3f (%+.2f) | "
+            print("CALIB %-24s score=%+.2f | dens %.3f vs %.3f (%+.2f) | "
                   "red %+.2f | stalk %+.0f%s | fps=%.0f"
                   % (REASON_TEXT.get(r["reason"], "OK"), score,
-                     r["s_centroid"], r["d_near"], r["d_far"], r["s_width"],
-                     r["s_red"], r["s_stalk"], "" if r["agree"] else " DISAGREE",
+                     r["d_near"], r["d_far"], r["s_width"], r["s_red"],
+                     r["s_stalk"], "" if r["agree"] else " DISAGREE",
                      clock.fps()))
         continue
 
@@ -850,7 +940,7 @@ while True:
         if not present:
             state, t_state = WAIT, now
         else:
-            answer = live
+            answer = live            # sign of the same score shown on screen
             if abs(score) >= DECIDE_MIN:
                 if answer == hold_answer:
                     hold_n += 1
@@ -859,16 +949,16 @@ while True:
             elapsed = time.ticks_diff(now, t_state)
             if hold_n >= STABLE_N or (elapsed >= MAX_WAIT_MS and hold_answer):
                 final = hold_answer
-                final_score = score
+                final_score = score        # remember what we decided on
                 set_outputs(final)
                 total += 1
                 pulse_until = time.ticks_add(now, PULSE_MS)
                 state, t_state = LOCKED, now
                 print(">>> %s ARRIVED FIRST -> %s HIGH (3.3V)  ==> %s   "
-                      "(score=%+.2f cent=%+.2f stalk=%+.0f%s)"
+                      "(score=%+.2f stalk=%+.0f%s)"
                       % (NAME[final], "P0" if final == "STEM" else "P1",
                          "ROTATE 180 (P2 HIGH)" if final == ROTATE_ON
-                         else "NO ROTATE", score, r["s_centroid"], r["s_stalk"],
+                         else "NO ROTATE", score, r["s_stalk"],
                          "" if r["agree"] else " DISAGREE"))
 
     # ----------------------------- LOCKED -----------------------------
@@ -889,7 +979,7 @@ while True:
             if empty >= CLEAR_FRAMES:
                 set_outputs(None)
                 final = None
-                reset_votes()
+                reset_votes()              # next chili starts with a clean slate
                 print("--- chili gone: ready for next ---")
                 state, t_state = WAIT, now
 

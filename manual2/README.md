@@ -7,7 +7,9 @@ version stays on record and you can always go back to one that worked.
 
 | File | Version | What changed |
 |---|---|---|
-| `open_mv_v13.py` | 13 | **Current.** The camera finds the bright metal channel by itself (`AUTO_CHANNEL`) - no hand-measured box |
+| `open_mv_v15.py` | 15 | **Current.** Fixed APEX-only bias by introducing Mass Centroid Shift (`s_centroid`, W=1.5), setting `END_INSET = 0.25` for true body shoulder-vs-tail density, and constraining `check_stalk` to avoid false trigger on bare channel metal. |
+| `open_mv_v14.py` | 14 | Reverted `AUTO_CHANNEL` (v13 split/lost blobs with chilli present). Fixed narrow `CHANNEL_ROI = (186, 50, 36, 160)` centered on the chute. Smoothing increased (window 9, stable frames 5). |
+| `open_mv_v13.py` | 13 | Attempted automatic bright-channel finder (`AUTO_CHANNEL`), but failed when chilli broke bright strip or altered ROI dynamically |
 | `open_mv_v12.py` | 12 | `CHANNEL_ROI` moved to the middle of the picture, (90, 60, 140, 120) |
 | `open_mv_v11.py` | 11 | Fixed a bias that pushed nearly every answer to STEM: the stalk check was reading the stopper bar itself as "stalk". All measuring boxes are now kept inside the channel |
 | `open_mv_v10.py` | 10 | Manual / automatic threshold switch (`MANUAL_L`); the dividing line in use is shown on screen as `L<=NN AUTO` or `L<=NN SET` |
