@@ -7,7 +7,8 @@ version stays on record and you can always go back to one that worked.
 
 | File | Version | What changed |
 |---|---|---|
-| `open_mv_v15.py` | 15 | **Current.** Fixed APEX-only bias by introducing Mass Centroid Shift (`s_centroid`, W=1.5), setting `END_INSET = 0.25` for true body shoulder-vs-tail density, and constraining `check_stalk` to avoid false trigger on bare channel metal. |
+| `open_mv_v16.py` | 16 | **Current.** Fixed shadow-merge bias past stopper: set tight `CHANNEL_ROI = (200, 50, 28, 138)` stopping cleanly at the stopper bar, tightened `BLOB_MARGIN = 2` to prevent merging with table shadows, and capped `DARK_L_MAX = 50`. |
+| `open_mv_v15.py` | 15 | Introduced Mass Centroid Shift (`s_centroid`, W=1.5), `END_INSET = 0.25`, and balanced ensemble voting. |
 | `open_mv_v14.py` | 14 | Reverted `AUTO_CHANNEL` (v13 split/lost blobs with chilli present). Fixed narrow `CHANNEL_ROI = (186, 50, 36, 160)` centered on the chute. Smoothing increased (window 9, stable frames 5). |
 | `open_mv_v13.py` | 13 | Attempted automatic bright-channel finder (`AUTO_CHANNEL`), but failed when chilli broke bright strip or altered ROI dynamically |
 | `open_mv_v12.py` | 12 | `CHANNEL_ROI` moved to the middle of the picture, (90, 60, 140, 120) |
