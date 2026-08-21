@@ -7,7 +7,8 @@ version stays on record and you can always go back to one that worked.
 
 | File | Version | What changed |
 |---|---|---|
-| `open_mv_v16.py` | 16 | **Current.** Fixed shadow-merge bias past stopper: set tight `CHANNEL_ROI = (200, 50, 28, 138)` stopping cleanly at the stopper bar, tightened `BLOB_MARGIN = 2` to prevent merging with table shadows, and capped `DARK_L_MAX = 50`. |
+| `open_mv_v17.py` | 17 | **Current.** Color Presence Gate (`MIN_CHILI_RED = 6.0`): Rejects bare metal shadows on aluminum chute (which have `a_mean < 4.0`), eliminating phantom chilli detections and correctly displaying `STOPPER: EMPTY` when container is empty. |
+| `open_mv_v16.py` | 16 | Fixed shadow-merge bias past stopper: set tight `CHANNEL_ROI = (200, 50, 28, 138)` stopping cleanly at the stopper bar, tightened `BLOB_MARGIN = 2` to prevent merging with table shadows, and capped `DARK_L_MAX = 50`. |
 | `open_mv_v15.py` | 15 | Introduced Mass Centroid Shift (`s_centroid`, W=1.5), `END_INSET = 0.25`, and balanced ensemble voting. |
 | `open_mv_v14.py` | 14 | Reverted `AUTO_CHANNEL` (v13 split/lost blobs with chilli present). Fixed narrow `CHANNEL_ROI = (186, 50, 36, 160)` centered on the chute. Smoothing increased (window 9, stable frames 5). |
 | `open_mv_v13.py` | 13 | Attempted automatic bright-channel finder (`AUTO_CHANNEL`), but failed when chilli broke bright strip or altered ROI dynamically |

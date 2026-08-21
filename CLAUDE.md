@@ -30,41 +30,78 @@ This is a simpler problem: one fixed position, one binary answer.
 
 Module 2 (a quality chute below the channel, needing a fisheye lens) is **out of scope**.
 
-## Files
+## Files and versioning
 
-| File | Status |
-|---|---|
-| `chili_stopper_factory.py` | **CURRENT** — stem-vs-tip at the stopper. This is the one to work on. |
-| `chili_factory_multi.py` | Old LEFT/RIGHT approach, tracked several chillies at once |
-| `main.py` | Old factory version using empty-tray background subtraction |
-| `chili_leftright_gpio.py`, `chili_leftright_v2.py` | Earlier LEFT/RIGHT versions with GPIO |
-| `chili_stem_detect.py` | First attempt, fixed red colour range |
-| `chili_bench_test.py` | Loose bench tester that reports why a frame was rejected |
+The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
-⚠️ `main.py` in this repo is an **old version**. When deploying, the *current* file is
-renamed to `main.py` on the camera — do not copy the repo's `main.py`.
+**`manual2/` is where the current work lives.** One numbered file per change:
 
-**Version the current file.** `chili_stopper_factory.py` carries a `VERSION n` header with a
-short changelog. Bump it and add a line on every change.
+```
+manual2/
+  open_mv_v17.py   <- highest number = current
+  open_mv_v16.py
+  ...
+  README.md        <- version table + the threshold guide
+open_mv2.py        <- working copy, same as the highest version
+```
+
+### How to save an updated version (follow this every time)
+
+Nothing in `manual2/` is ever overwritten. When the code changes:
+
+1. **Edit `open_mv2.py`** (the working copy).
+2. **Bump the `VERSION nn` header** at the top of the file and add a short
+   changelog line saying what changed *and why* — the "why" is what stops the
+   same mistake being repeated.
+3. **Copy it to a new numbered file**: `cp open_mv2.py manual2/open_mv_vNN.py`
+   — never overwrite an existing one.
+4. **Add a row to the top of the table in `manual2/README.md`**, and move the
+   word **Current** onto the new row.
+5. **Syntax-check**: `python -m py_compile open_mv2.py` (MicroPython imports
+   such as `sensor` and `pyb` will not resolve on a PC, but syntax and dead
+   names are caught).
+6. **Commit and push** with a message that explains the cause, not just the fix.
+
+Why keep every version: several "fixes" in this project made things worse
+(v13's automatic channel finder, for example). Being able to go straight back
+to a version that worked has been worth more than a tidy folder.
+
+⚠️ `main.py` in the repo is an **old** version. When deploying, the *current*
+file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-1. **Find the chilli by darkness, not colour.** The brightness limit is recomputed from each
-   frame (`L <= l_mean - DARK_K*l_stdev`, clamped). Fixed colour ranges were tried repeatedly
-   and always broke when the light changed or a chilli looked brown rather than red.
-2. **Pick the reddest candidate.** Among blobs passing the shape gates, the reddest wins.
-   This is what stops it locking onto wood, keyboards, shadows and table edges.
-3. **Follow the chilli's own axis** (`min_corners`, with a bounding-box fallback), so the
-   chilli can lie at any angle.
-4. **Measure both ends** with one small box at each end, inset from the tips.
-   - **Thickness (main clue):** the stem end is fat and blunt, the tip tapers. Shape-based,
-     so glare cannot break it.
-   - **Redness (helper):** the stem end is paler. Used when readable, ignored when washed out.
-5. **State machine** WAIT → CHECK → LOCKED → CLEARING gives one locked answer per chilli.
+1. **Find the chilli by darkness, not colour.** The channel metal is bright, the chilli is
+   dark. Colour cannot answer *"is this a chilli"* — a pink cloth reads redness 20–40 while
+   a dark dried chilli reads 4–8, so the cloth is **redder than the chilli**. Every fixed
+   colour range tried in this project eventually failed on that.
+2. **The dividing line — `MANUAL_L`.** Brightness runs 0–100; anything darker than the line
+   is chilli. `MANUAL_L = None` measures it from each frame (good while lighting is still
+   being set up); `MANUAL_L = 45` fixes it (what production wants — repeatable, testable,
+   and a technician can turn one number). The line in use is drawn on screen as
+   `L<=NN AUTO` or `L<=NN SET`, so the value AUTO settles on can simply be copied across.
+3. **Follow the chilli's own axis** (`min_corners`, bounding-box fallback), so it works at
+   any angle.
+4. **Compare the two ends**, each with a small box inset from the tip:
+   - **Stalk** — pale stalk poking out past one end. Strongest clue when visible.
+   - **Thickness** — the stem end is fat and blunt, the tip tapers.
+   - **Redness** — the stem end is the paler one.
+
+   All three are **relative comparisons within the same chilli**, never absolute thresholds.
+   Disagreement between stalk and thickness halves the score, so a confusing chilli needs
+   more frames before it locks.
+5. **Everything is measured as density** (pixels ÷ area), not raw counts. Boxes at the frame
+   edge get clipped, and the stopper end is at the edge by definition — raw counts biased
+   every decision toward APEX.
+6. **All measuring boxes are clipped to `CHANNEL_ROI`.** The stopper bar sits just past the
+   stopper end and is dark; before clipping, the stalk check read that hardware as a stalk
+   on *every* chilli and pushed nearly every answer to STEM.
+7. **State machine** WAIT → CHECK → LOCKED → CLEARING, with the score averaged over several
+   frames, gives one locked answer per chilli.
 
 **Only the dark BODY is detected — the pale stalk is not dark, so it is invisible to the
-detector.** Size gates must therefore suit the body, not a whole chilli. Getting this wrong
-was the cause of a long run of false "EMPTY" results.
+detector.** Size gates must suit the body, not a whole chilli. Getting this wrong caused a
+long run of false `EMPTY` results.
 
 ### Outputs
 `P0` = stem arrived first · `P1` = tip (pod) arrived first · `P2` = rotate 180°.
@@ -116,8 +153,10 @@ Lighting and mounting decide accuracy far more than code:
 
 `chili_files/` on the developer's Desktop also holds company material: `Imaging System.pptx`,
 `Chilli Pics.pptx`, `Machine Vision Project-1.pdf`, a `.stp` machine CAD assembly, and the
-vendor's `REQ1.zip`/`REQ2.zip`. **These are excluded from git by a whitelist `.gitignore`** and
-must not be pushed to the public repo — they show the employer's machine and IP.
+vendor's `REQ1.zip`/`REQ2.zip`. **These are excluded by `.gitignore`** and must not be pushed to the public repo — they
+show the employer's machine and IP. Note the ignore file is now a *blacklist*, so a new
+confidential file type dropped into this folder is **not** automatically safe: check
+`git status` before committing, and add the pattern if anything unexpected appears.
 
 The vendor's own detection logic ships as compiled `.mpy` files (`hog_lbp_db`, `stm_nostm`),
 which cannot be read or tuned; their surrounding `main.py` is mostly padding. Replacing that

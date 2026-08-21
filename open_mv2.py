@@ -1,31 +1,23 @@
 # open_mv2.py  —  OpenMV Cam H7 Plus
 # ==================================================================================
-#  VERSION 16     (bumped every time the code changes - check this first)
+#  VERSION 17     (bumped every time the code changes - check this first)
 #  Successor to chili_stopper_factory.py.
 # ----------------------------------------------------------------------------------
-#  v16 TIGHT ROI & ZERO-SHADOW GATES (FIXES FALSE STEM / SHADOW MERGE).
-#      In v15, CHANNEL_ROI reached y=210 (onto the dark floral mat past the stopper)
-#      and BLOB_MARGIN was 14. This caused the shadow and dark table below the
-#      stopper to merge into the chilli blob, making the apex look fat/heavy and
-#      forcing a false STEM decision.
+#  v17 COLOR PRESENCE GATE (FIXES PHANTOM CHILI IN EMPTY CONTAINER).
+#      In v16, when the container was empty, the camera found the shadow on the
+#      aluminum channel and treated it as a chili because redness was only used
+#      to break ties, never to reject.
 #      Fixed by:
-#      1. CHANNEL_ROI = (200, 50, 28, 138): Perfectly tight inside the white metal
-#         chute, stopping exactly at the stopper bar (no floral table bleed).
-#      2. BLOB_MARGIN = 2: Tight blob boundary, prevents merging with shadows.
-#      3. DARK_L_MAX = 50: Ignores light shadows on aluminum.
-#      4. Symmetric Mass Centroid + Body Width Profile.
+#      1. MIN_CHILI_RED = 6.0: A real dried chili has redness a_mean >= 8 to 35.
+#         Bare aluminum chute and shadows on metal have a_mean ~ -2 to +4.
+#         Any blob with redness < 6.0 is instantly rejected as bare metal shadow.
+#      2. When empty, the camera cleanly reports "STOPPER: EMPTY" and outputs stay OFF.
+# ----------------------------------------------------------------------------------
+#  v16 TIGHT ROI & ZERO-SHADOW GATES (FIXES FALSE STEM / SHADOW MERGE).
 # ----------------------------------------------------------------------------------
 #  v15 FIXED APEX-ONLY BIAS VIA MASS CENTROID SHIFT & BALANCED ENSEMBLE.
 # ----------------------------------------------------------------------------------
 #  v14 Back to a FIXED narrow box: CHANNEL_ROI = (186, 50, 36, 160).
-# ----------------------------------------------------------------------------------
-#  v13 THE CAMERA NOW FINDS THE CHANNEL BY ITSELF (AUTO_CHANNEL).
-# ----------------------------------------------------------------------------------
-#  v12 CHANNEL_ROI moved to the MIDDLE of the picture.
-# ----------------------------------------------------------------------------------
-#  v11 FIXED A BIAS THAT PUSHED NEARLY EVERY ANSWER TO "STEM".
-# ----------------------------------------------------------------------------------
-#  v10 MANUAL / AUTOMATIC threshold switch - see MANUAL_L in the config.
 # ==================================================================================
 
 import sensor, image, time, math
@@ -37,8 +29,7 @@ CALIBRATE     = False    # True = tuning mode: pins stay OFF, numbers printed
 DEBUG         = True     # True = show detection boxes
 
 # White chute ROI: (x, y, width, height)
-# Must sit strictly inside the bright metal chute and stop AT the stopper bar.
-# Must NOT include the dark table/mat outside the chute!
+# Tight inside the white metal chute, stopping AT the stopper bar.
 CHANNEL_ROI   = (200, 50, 28, 138)
 #                x    y   w    h
 
@@ -56,6 +47,12 @@ DARK_K        = 0.50     # Dynamic sensitivity
 DARK_L_MIN    = 8
 DARK_L_MAX    = 50       # Caps threshold so shadows on aluminum (L > 50) are ignored
 MIN_CHILI_STD = 6.0      # Empty bare metal channel has uniform brightness (std < 6)
+
+# ---- COLOR PRESENCE GATE ----
+# A real dried chili has redness a_mean of +10 to +40.
+# Bare aluminum metal and shadows on it have a_mean of -4 to +4.
+# Rejecting blobs with redness < 6.0 guarantees an empty chute is never mistaken for a chili.
+MIN_CHILI_RED = 6.0
 
 # ---- shape filters (tuned for all sizes of dried chillies) ----
 MIN_AREA      = 120      # Ignore tiny noise specks
@@ -95,7 +92,7 @@ DISAGREE_MULT = 0.6
 STOPPER_GAP_MAX_PX = 9999
 DECIDE_MIN     = 0.15
 STABLE_N       = 4               # 4-frame confirmation (~100ms)
-CLEAR_FRAMES   = 5               # Empty frames before next chili
+CLEAR_FRAMES   = 4               # Empty frames before next chili
 MAX_WAIT_MS    = 1500
 VOTE_HISTORY_MAX = 7             # Smoothing window
 
@@ -263,7 +260,7 @@ def pick_stopper_end(E0, E1):
 
 def shape_ok(b):
     bw, bh, px = _get(b, "w"), _get(b, "h"), _get(b, "pixels")
-    if px > MAX_AREA:
+    if px > MAX_AREA or px < MIN_AREA:
         return False
     length, width = max(bw, bh), max(1, min(bw, bh))
     if width > MAX_WIDTH_PX:
@@ -306,6 +303,11 @@ def find_chili(img, obj_thrs):
         red = region_redness(img, rect, obj_thrs)
         if red is None:
             red = 0.0
+
+        # CRITICAL: Reject bare aluminum shadows and neutral gray reflections!
+        # A real dried chili has redness >= 6.0. Bare metal has redness < 4.0.
+        if red < MIN_CHILI_RED:
+            continue
         scan["colour"] += 1
 
         E0, E1, width = axis_ends(b)
@@ -559,13 +561,13 @@ def draw_scene(img, r, label=None, col=(0, 255, 0), status=None,
             except Exception:
                 pass
 
-    if r["rect"]:
+    if r["rect"] and r["reason"] == "ok":
         try:
             img.draw_rectangle(r["rect"], color=(0, 255, 0), thickness=2)
         except Exception:
             pass
 
-    if r.get("centroid"):
+    if r.get("centroid") and r["reason"] == "ok":
         cx, cy = int(r["centroid"][0]), int(r["centroid"][1])
         try:
             img.draw_circle(cx, cy, 3, color=(255, 255, 0), thickness=2)
@@ -679,7 +681,7 @@ while True:
     if CALIBRATE:
         set_outputs(None)
         service_leds(live)
-        if live:
+        if live and present:
             col = (0, 150, 255) if live == "STEM" else (0, 255, 0)
             lbl = "STOPPER: %s (%s)" % (NAME[live],
                                         "P0" if live == "STEM" else "P1")
@@ -740,13 +742,13 @@ while True:
     elif state == LOCKED:
         if OUTPUT_MODE == "pulse" and time.ticks_diff(now, pulse_until) >= 0:
             set_outputs(None)
-        if r["reason"] == "empty":
+        if not present:
             empty = 1
             state, t_state = CLEARING, now
 
     # ---------------------------- CLEARING ----------------------------
     elif state == CLEARING:
-        if r["reason"] != "empty":
+        if present:
             empty = 0
             state = LOCKED
         else:

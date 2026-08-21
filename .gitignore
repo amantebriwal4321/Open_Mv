@@ -30,3 +30,6 @@ Camera_Videos/
 _extracted/
 _imgsys/
 _pptx/
+
+# OpenMV IDE autosave scratch files
+*.autosave
