@@ -1,18 +1,7 @@
 # open_mv2.py  —  OpenMV Cam H7 Plus
 # ==================================================================================
-#  VERSION 13     (bumped every time the code changes - check this first)
+#  VERSION 12     (bumped every time the code changes - check this first)
 #  Successor to chili_stopper_factory.py.
-# ----------------------------------------------------------------------------------
-#  v13 THE CAMERA NOW FINDS THE CHANNEL BY ITSELF (AUTO_CHANNEL).
-#      Hand-measuring the box has caused most of the wrong answers.  If it is
-#      not exactly on the metal channel it takes in the mat or the table, and
-#      those are DARKER than the bright channel - so the camera locked onto
-#      the mat and ignored the chili sitting right next to it.
-#      The channel is simply the brightest large thing in view, and the chili
-#      is the dark thing lying in it.  So the camera looks for the bright
-#      strip first, then searches for the chili only inside it.  No box to
-#      measure, and it follows the channel if the camera is nudged.
-#      Set AUTO_CHANNEL = False to go back to the fixed CHANNEL_ROI.
 # ----------------------------------------------------------------------------------
 #  v12 CHANNEL_ROI moved to the MIDDLE of the picture, (90, 60, 140, 120).
 #      It was a narrow strip at the right-hand edge, and the chili was being
@@ -126,19 +115,6 @@ DEBUG         = True     # True = show detection boxes
 #   (x, y, width, height)   picture is 320 wide, 240 tall
 # Now set to the MIDDLE of the view: x 90-230, y 60-180.
 CHANNEL_ROI   = (90, 60, 140, 120)
-
-# AUTO_CHANNEL: find the bright metal channel by itself, every frame.
-# The channel is the brightest thing in view; the chili is the dark thing
-# lying in it.  So the camera looks for the bright strip first and searches
-# for the chili only inside it.  This removes the hand-measured box that has
-# been the cause of most wrong answers - if the box is not exactly on the
-# channel it locks onto the mat or the table instead, which are also darker
-# than the channel.
-# Set to False to go back to the fixed CHANNEL_ROI above.
-AUTO_CHANNEL  = True
-CH_MIN_PIX    = 600      # a bright strip smaller than this is not the channel
-CH_INSET      = 2        # trim this many pixels off the found strip, so the
-                         # bright edge of the channel is not counted
 
 # Which edge of that box the stopper is on.
 #   chili lies UP-AND-DOWN in the picture -> "top" or "bottom"
@@ -326,45 +302,6 @@ def region_redness(img, roi, obj_thrs):
         return _stat(st, "a_mean")
     except Exception:
         return None
-
-def find_channel(img):
-    """Locate the bright metal channel in the picture.
-
-    The channel is the brightest large object in view.  Finding it each frame
-    means the camera does not depend on someone measuring a box by hand and
-    typing coordinates in - and it follows the channel if the camera is
-    nudged.  Returns a box, or None if no convincing bright strip is found."""
-    try:
-        st = img.get_statistics()
-        l_mean = _stat(st, "l_mean", 50.0)
-        l_std = _stat(st, "l_stdev", 0.0)
-        if l_std <= 0:
-            l_std = _stat(st, "l_std", 12.0)
-    except Exception:
-        l_mean, l_std = 50.0, 12.0
-
-    # "bright" = clearly above the average of the whole picture
-    lim = min(95, max(45, l_mean + 0.7 * l_std))
-    thrs = [(int(lim), 100, -128, 127, -128, 127)]
-    try:
-        blobs = img.find_blobs(thrs, pixels_threshold=CH_MIN_PIX,
-                               area_threshold=CH_MIN_PIX, merge=True)
-    except Exception:
-        return None
-
-    best, best_px = None, 0
-    for b in blobs:
-        bw, bh, px = _get(b, "w"), _get(b, "h"), _get(b, "pixels")
-        if bw < 10 or bh < 10:
-            continue
-        if px > best_px:                   # the biggest bright region wins
-            best_px = px
-            best = (_get(b, "x"), _get(b, "y"), bw, bh)
-    if best is None:
-        return None
-    x, y, w, h = best
-    return clamp_roi(x + CH_INSET, y + CH_INSET,
-                     w - 2 * CH_INSET, h - 2 * CH_INSET)
 
 def object_threshold(img):
     """Work out the dividing line between 'chili' (dark) and 'channel' (bright),
@@ -861,13 +798,6 @@ while True:
     clock.tick()
     now = time.ticks_ms()
     img = sensor.snapshot()
-
-    # Find the bright channel first, and look for the chili only inside it.
-    # Assigning CHANNEL_ROI here updates it for every function below.
-    if AUTO_CHANNEL:
-        found_ch = find_channel(img)
-        if found_ch is not None and found_ch[2] > 8 and found_ch[3] > 8:
-            CHANNEL_ROI = found_ch
 
     obj_thrs, lim = object_threshold(img)
     r = look(img, obj_thrs, lim)
