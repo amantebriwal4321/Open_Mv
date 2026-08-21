@@ -1,7 +1,17 @@
 # open_mv2.py  —  OpenMV Cam H7 Plus
 # ==================================================================================
-#  VERSION 9      (bumped every time the code changes - check this first)
+#  VERSION 10     (bumped every time the code changes - check this first)
 #  Successor to chili_stopper_factory.py.
+# ----------------------------------------------------------------------------------
+#  v10 MANUAL / AUTOMATIC threshold switch - see MANUAL_L in the config.
+#      AUTO   : the dividing line between "dark = chili" and "bright = channel"
+#               is measured from every frame, so it follows the lighting.  Good
+#               while the lighting is still being set up.
+#      MANUAL : the line is a fixed number you type in.  The same picture always
+#               gives the same answer, which is what a production machine needs
+#               and what can actually be tested and signed off.
+#      The line in use is now shown on screen as "L<=NN AUTO" or "L<=NN SET",
+#      so you can read the number AUTO settles on and copy it into MANUAL_L.
 # ----------------------------------------------------------------------------------
 #  v9  THE ANSWER AND THE NUMBER CAN NO LONGER DISAGREE.
 #      The log was printing "STEM ARRIVED FIRST ... (score=-0.37)" - a negative
@@ -91,9 +101,29 @@ STOPPER_SIDE  = "bottom"         # stopper is at the bottom of the screen
 # them also rejects half the crop.  What is reliable: an EMPTY metal channel is
 # uniformly bright, and a chili is a DARK region in it.  That holds for red,
 # brown and almost-black chilies equally.
-DARK_K        = 0.60
-DARK_L_MIN    = 8
-DARK_L_MAX    = 70
+# ===================== THE ONE NUMBER TO ADJUST =======================
+# Brightness runs 0 (black) to 100 (white).  The channel metal is bright,
+# a chili is dark.  This is the dividing line between them:
+#     anything DARKER than the line = chili;  brighter = channel.
+#
+#   MANUAL_L = None   -> AUTOMATIC.  The camera measures the line itself from
+#                        every frame, so it follows the lighting on its own.
+#                        Use this while the lighting is still being set up.
+#
+#   MANUAL_L = 45     -> MANUAL.  The line is fixed at 45 and never moves.
+#                        Same picture always gives the same answer.  Use this
+#                        in production, once the light is fixed and enclosed.
+#
+# HOW TO FIND YOUR NUMBER: run in AUTO with a chili in the channel and read
+# "L<=NN" on the screen.  That NN is what automatic is choosing.  Put that
+# number here, switch to manual, and check it still works.
+#   Chili not being seen  -> RAISE the number (more counts as dark)
+#   Shadows being counted -> LOWER the number (less counts as dark)
+MANUAL_L      = None
+
+DARK_K        = 0.60     # AUTO only: how far below average counts as dark
+DARK_L_MIN    = 8        # AUTO only: guard rails - the automatic line is
+DARK_L_MAX    = 70       # never allowed outside these
 MIN_CHILI_STD = 6.0      # brightness spread inside the channel.  Bare metal is
                          # uniform (std < 6); anything lying in it breaks that
                          # up.  This is the presence test - no colour involved.
@@ -245,8 +275,24 @@ def region_redness(img, roi, obj_thrs):
         return None
 
 def object_threshold(img):
-    """Brightness limit separating chili from the bright channel, plus a quick
-    'is anything here at all' test.  Both are worked out from this frame."""
+    """Work out the dividing line between 'chili' (dark) and 'channel' (bright),
+    and say whether anything is in the channel at all.
+
+    MANUAL mode : the line is the fixed number you typed in.  Same picture
+                  always gives the same answer - what a production machine wants.
+    AUTO mode   : the line is measured from this frame, so it follows the light.
+                  Good while the lighting is still being sorted out."""
+    # ---------------- MANUAL: fixed line, fully predictable ----------------
+    if MANUAL_L is not None:
+        lim = int(min(max(MANUAL_L, 0), 100))
+        thrs = [(0, lim, -128, 127, -128, 127)]
+        # "is a chili here?" = enough dots darker than the line.  Deterministic,
+        # unlike the automatic test, which depends on how the frame looks.
+        if count_px(img, CHANNEL_ROI, thrs) < MIN_AREA:
+            return None, lim               # nothing dark enough: channel empty
+        return thrs, lim
+
+    # ---------------- AUTO: line measured from this frame ------------------
     try:
         st = img.get_statistics(roi=CHANNEL_ROI)
         l_mean = _stat(st, "l_mean", 50.0)
@@ -582,7 +628,8 @@ def draw_str(img, x, y, text, color=(255, 255, 255), scale=2):
         cur_x += char_w
 
 def draw_scene(img, r, label=None, col=(0, 255, 0), status=None,
-               state_name="", total=0, fps=0.0, shown_score=None):
+               state_name="", total=0, fps=0.0, shown_score=None,
+               shown_lim=0):
     """On-screen HUD: what is at the stopper, and which pin is being driven.
     shown_score: once an answer is LOCKED, pass the score it was locked on.
     Showing the live score there made the HUD contradict itself - the label
@@ -643,15 +690,20 @@ def draw_scene(img, r, label=None, col=(0, 255, 0), status=None,
 
     draw_str(img, 12, 10, text_to_show, color=text_color, scale=2)
 
+    # The dividing line is always shown.  In AUTO this is the number to write
+    # down and copy into MANUAL_L; in MANUAL it confirms your number is in use.
+    mode = "SET" if MANUAL_L is not None else "AUTO"
+    tail = "L<=%d %s | %d FPS" % (shown_lim, mode, int(fps))
+
     if shown_score is not None:            # a locked answer: show ITS score
-        draw_str(img, 12, 32, "SCORE %+.2f | %d FPS" % (shown_score, int(fps)),
+        draw_str(img, 12, 32, "SCORE %+.2f | %s" % (shown_score, tail),
                  color=(255, 255, 255), scale=1)
     elif r["reason"] == "ok":
         flag = "" if r["agree"] else " ?"
-        info_line = "SCORE %+.2f%s | %d FPS" % (r["score"], flag, int(fps))
-        draw_str(img, 12, 32, info_line, color=(255, 255, 255), scale=1)
+        draw_str(img, 12, 32, "SCORE %+.2f%s | %s" % (r["score"], flag, tail),
+                 color=(255, 255, 255), scale=1)
     else:
-        draw_str(img, 12, 32, "WAITING FOR CHILI | %d FPS" % int(fps),
+        draw_str(img, 12, 32, "WAITING | %s" % tail,
                  color=(180, 180, 180), scale=1)
 
 # ============================ STATE MACHINE ===========================
@@ -721,11 +773,12 @@ while True:
             col = (0, 150, 255) if live == "STEM" else (0, 255, 0)
             lbl = "STOPPER: %s (%s)" % (NAME[live],
                                         "P0" if live == "STEM" else "P1")
-            draw_scene(img, r, lbl, col, None, "CALIBRATE", total, clock.fps())
+            draw_scene(img, r, lbl, col, None, "CALIBRATE", total, clock.fps(),
+                       shown_lim=lim)
         else:
             status = "STOPPER: %s" % REASON_TEXT.get(r["reason"], "EMPTY")
             draw_scene(img, r, None, (255, 255, 255), status, "CALIBRATE",
-                       total, clock.fps())
+                       total, clock.fps(), shown_lim=lim)
         if r["reason"] == "empty":
             print("CALIB EMPTY  blobs=%d shape=%d colour=%d tilt=%d "
                   "best_tilt=%d L<=%d fps=%.0f"
@@ -802,14 +855,14 @@ while True:
         lbl = "STOPPER: %s (%s)" % (NAME[final],
                                     "P0" if final == "STEM" else "P1")
         draw_scene(img, r, lbl, col, None, sname, total, clock.fps(),
-                   shown_score=final_score)
+                   shown_score=final_score, shown_lim=lim)
         service_leds(final)
     elif state == CHECK:
         draw_scene(img, r, None, (255, 255, 0), "STOPPER: CHECKING...", sname,
-                   total, clock.fps())
+                   total, clock.fps(), shown_lim=lim)
         service_leds(None)
     else:
         status = "STOPPER: %s" % REASON_TEXT.get(r["reason"], "WAITING")
         draw_scene(img, r, None, (255, 255, 255), status, sname,
-                   total, clock.fps())
+                   total, clock.fps(), shown_lim=lim)
         service_leds(None)

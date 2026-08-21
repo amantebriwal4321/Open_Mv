@@ -16,4 +16,13 @@
 !chili_leftright_v2.py
 !chili_factory_multi.py
 !chili_stopper_factory.py
+!open_mv2.py
 !main.py
+
+# --- manual2/ : one numbered file per change, newest version wins ---
+# Each time the code is changed a NEW file is added here (open_mv_v10.py,
+# open_mv_v11.py, ...) instead of overwriting, so every version stays on
+# record and it is obvious which one is current.
+!manual2/
+!manual2/*.py
+!manual2/*.md
