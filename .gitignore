@@ -1,28 +1,32 @@
-# Ignore EVERYTHING by default, then allow only our own source files.
-# This is deliberate: the working folder also holds the company's machine CAD,
-# internal specification documents, factory photos, a third-party (Keyence)
-# document and the vendor's compiled .mpy modules. None of that is ours to
-# publish, so a whitelist is used instead of a blacklist - a new confidential
-# file dropped into this folder can never be committed by accident.
-*
+# Ignore binary assets, videos, zips, PDFs, compiled bytecode, and test datasets
+*.pdf
+*.mp4
+*.jpeg
+*.jpg
+*.zip
+*.mpy
+*.py[cod]
+*$py.class
+__pycache__/
+.vscode/
+.idea/
+.gemini/
+scratch/
+System1/uncertain_images/
+Camera_Videos/
 
-# --- our own OpenMV vision scripts ---
-!.gitignore
-!README.md
-!CLAUDE.md
-!chili_stem_detect.py
-!chili_bench_test.py
-!chili_leftright_gpio.py
-!chili_leftright_v2.py
-!chili_factory_multi.py
-!chili_stopper_factory.py
-!open_mv2.py
-!main.py
+# --- company material: NOT ours to publish ---
+# The working folder also holds the employer's machine CAD, internal
+# specification decks and factory photos.  The patterns above miss these
+# two, so they are named explicitly.
+*.pptx
+*.stp
+*.docx
+~$*
 
-# --- manual2/ : one numbered file per change, newest version wins ---
-# Each time the code is changed a NEW file is added here (open_mv_v10.py,
-# open_mv_v11.py, ...) instead of overwriting, so every version stays on
-# record and it is obvious which one is current.
-!manual2/
-!manual2/*.py
-!manual2/*.md
+# Folders produced by unpacking the company decks/zips: these hold factory
+# photos (.png) and the vendor's compiled modules.  .png is not covered by
+# the rules above, so name the folders explicitly.
+_extracted/
+_imgsys/
+_pptx/
