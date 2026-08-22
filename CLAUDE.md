@@ -40,6 +40,7 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 manual2/
   open_mv_v17.py   <- highest number = current
   open_mv_v16.py
+  open_mv_v15.py
   ...
   README.md        <- version table + the threshold guide
 open_mv2.py        <- working copy, same as the highest version
@@ -71,37 +72,52 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-1. **Find the chilli by darkness, not colour.** The channel metal is bright, the chilli is
-   dark. Colour cannot answer *"is this a chilli"* — a pink cloth reads redness 20–40 while
-   a dark dried chilli reads 4–8, so the cloth is **redder than the chilli**. Every fixed
-   colour range tried in this project eventually failed on that.
-2. **The dividing line — `MANUAL_L`.** Brightness runs 0–100; anything darker than the line
-   is chilli. `MANUAL_L = None` measures it from each frame (good while lighting is still
-   being set up); `MANUAL_L = 45` fixes it (what production wants — repeatable, testable,
-   and a technician can turn one number). The line in use is drawn on screen as
-   `L<=NN AUTO` or `L<=NN SET`, so the value AUTO settles on can simply be copied across.
-3. **Follow the chilli's own axis** (`min_corners`, bounding-box fallback), so it works at
-   any angle.
-4. **Compare the two ends**, each with a small box inset from the tip:
-   - **Stalk** — pale stalk poking out past one end. Strongest clue when visible.
-   - **Thickness** — the stem end is fat and blunt, the tip tapers.
-   - **Redness** — the stem end is the paler one.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v17.py`.
 
-   All three are **relative comparisons within the same chilli**, never absolute thresholds.
-   Disagreement between stalk and thickness halves the score, so a confusing chilli needs
-   more frames before it locks.
-5. **Everything is measured as density** (pixels ÷ area), not raw counts. Boxes at the frame
-   edge get clipped, and the stopper end is at the edge by definition — raw counts biased
-   every decision toward APEX.
-6. **All measuring boxes are clipped to `CHANNEL_ROI`.** The stopper bar sits just past the
-   stopper end and is dark; before clipping, the stalk check read that hardware as a stalk
-   on *every* chilli and pushed nearly every answer to STEM.
-7. **State machine** WAIT → CHECK → LOCKED → CLEARING, with the score averaged over several
-   frames, gives one locked answer per chilli.
+1. **Find the chilli by darkness.** The channel metal is bright, the chilli is dark.
+   `MANUAL_L = None` measures the dividing line from each frame (`l_mean - DARK_K*l_stdev`,
+   clamped to `DARK_L_MIN..DARK_L_MAX`, currently capped at **50** so shadows on aluminium
+   are excluded). Set `MANUAL_L` to a fixed number for production — repeatable, testable,
+   and adjustable by a technician. The line in use is drawn on screen as `L<=NN AUTO/SET`.
+2. **Two presence gates before anything is judged:**
+   - `MIN_CHILI_STD = 6.0` — an empty chute is uniformly bright; anything lying in it
+     breaks that up.
+   - `MIN_CHILI_RED = 6.0` — bare-metal shadows read `a_mean < 4`, a chilli reads higher.
+     **Note the nuance:** colour still cannot answer *"which end is the stem"*, and it must
+     never be used to *reject* a candidate outright — a pink cloth reads redness 20–40 while
+     a dark dried chilli reads 4–8, so a rejection threshold that admits real chillies also
+     admits brighter objects. It is only safe here as a *presence* gate against shadow.
+3. **Follow the chilli's own axis** (`min_corners`, bounding-box fallback) — any angle works.
+4. **Four relative end-comparisons**, weights in the config:
+   | Cue | Weight | Says STEM when… |
+   |---|---|---|
+   | centroid shift | 1.5 | the mass sits toward that end |
+   | thickness | 1.2 | that end is fatter |
+   | redness | 0.6 | that end is paler |
+   | stalk | 0.4 | pale stalk pokes out past that end |
+
+   All are comparisons **within the same chilli**, never absolute thresholds. Disagreement
+   between cues reduces confidence so a confusing chilli needs more frames before locking.
+5. **Density, not raw counts** (pixels ÷ area). Boxes at the frame edge get clipped and the
+   stopper end is at the edge by definition — raw counts biased every decision toward APEX.
+6. **Every measuring box is clipped to `CHANNEL_ROI`.** The stopper bar sits just past the
+   stopper end and is dark; unclipped, the stalk check read that hardware as a stalk on
+   *every* chilli and pushed nearly all answers to STEM.
+7. **`BLOB_MARGIN = 2`** keeps the blob tight to the body so it never merges with a nearby
+   shadow — a merged shadow makes the wrong end look fat, which corrupts the main cue.
+8. **State machine** WAIT → CHECK → LOCKED → CLEARING, score averaged over
+   `VOTE_HISTORY_MAX = 7` frames and held for `STABLE_N = 4`, gives one locked answer
+   per chilli.
 
 **Only the dark BODY is detected — the pale stalk is not dark, so it is invisible to the
 detector.** Size gates must suit the body, not a whole chilli. Getting this wrong caused a
 long run of false `EMPTY` results.
+
+### What has been tried and abandoned
+- **Fixed colour ranges to find the chilli** (v1–v7) — broke every time the light changed.
+- **`AUTO_CHANNEL`, finding the bright chute automatically** (v13) — the chilli breaks the
+  bright strip in two, so the found region jumped around. Reverted in v14; a fixed
+  `CHANNEL_ROI` on the chute is what works.
 
 ### Outputs
 `P0` = stem arrived first · `P1` = tip (pod) arrived first · `P2` = rotate 180°.
