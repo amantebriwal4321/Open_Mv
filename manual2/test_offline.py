@@ -50,7 +50,7 @@ STOP_Y = CH_Y + CH_H - 2          # the chilli rests here (bottom = stopper)
 
 
 def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
-          off=0, noise=0.0, rails=0):
+          off=0, noise=0.0, rails=0, bar=0):
     """Return (L, A) images.
 
     stem_first  fat shoulder at the stopper end, point away from it
@@ -61,6 +61,9 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
     rails       px of dark rail just inside each ROI edge - i.e. CHANNEL_ROI
                 set slightly wider than the bright chute, which is what the
                 machine was actually doing
+    bar         px of dark STOPPER BAR inside the bottom edge of the ROI - i.e.
+                CHANNEL_ROI reaching a little past the stopper. Only darkens
+                the last band or two, so a single floor cannot remove it.
     """
     Limg = [[L_METAL] * W for _ in range(H)]
     Aimg = [[A_METAL] * W for _ in range(H)]
@@ -75,11 +78,16 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
             for x in list(range(CH_X, CH_X + rails)) +                      list(range(CH_X + CH_W - rails, CH_X + CH_W)):
                 Limg[y][x] = L_BODY + 6.0
 
+    if bar:
+        for y in range(CH_Y + CH_H - bar, CH_Y + CH_H):
+            for x in range(CH_X, CH_X + CH_W):
+                Limg[y][x], Aimg[y][x] = 12.0, 0.0
+
     cx = CX + off
     y_bot = STOP_Y - gap
     y_top = y_bot - body_len
 
-    for y in range(y_top, y_bot + 1):
+    for y in (range(y_top, y_bot + 1) if body_len > 0 else ()):
         t = (y_bot - y) / float(body_len)        # 0 at the stopper, 1 far away
         hw = (fat * (1.0 - t) + thin * t) if stem_first else (thin * (1.0 - t) + fat * t)
         for x in range(int(cx - hw), int(cx + hw) + 1):
@@ -144,9 +152,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v19.py")).read()
+src = open(os.path.join(here, "open_mv_v20.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v19.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v20.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -179,11 +187,33 @@ CASES = [
                                       body_len=48),                    "sliding"),
     ("pod short + rails",       dict(stem_first=True,  gap=52, body_len=48,
                                       rails=4),                        "sliding"),
+    # ROI reaching past the stopper, so the dark bar sits in the last band(s).
+    # A single floor cannot remove this - it is dark in SOME bands only.
+    ("stem first + stopper bar", dict(stem_first=True,  bar=8),          "STEM"),
+    ("apex first + stopper bar", dict(stem_first=False, bar=8),          "APEX"),
+    ("bar + rails, stem first",  dict(stem_first=True,  bar=8, rails=4), "STEM"),
+    ("bar + rails, apex first",  dict(stem_first=False, bar=8, rails=4), "APEX"),
+    # the pod stops short of the bar: must NOT be judged as if it had arrived
+    ("short of the bar",         dict(stem_first=True,  bar=8, gap=46,
+                                      body_len=48),                     "sliding"),
 ]
+
+reset_reference = mod["reset_reference"]
+
+def run(kw):
+    """Learn the empty chute, then show it the chilli - what the machine does."""
+    reset_reference()
+    empty_kw = dict(kw)
+    empty_kw["body_len"] = 0
+    empty_kw["stalk"] = 0
+    empty = FakeImg(*build(**empty_kw))
+    for _ in range(mod["REF_WARMUP"] + 2):
+        look(empty)
+    return look(FakeImg(*build(**kw)))
 
 fails = 0
 for name, kw, want in CASES:
-    r = look(FakeImg(*build(**kw)))
+    r = run(kw)
     got = "STEM" if r["score"] > 0 else "APEX"
     if want in ("STEM", "APEX"):
         ok = (r["reason"] == "ok") and got == want and abs(r["score"]) >= 0.12
@@ -204,8 +234,11 @@ for name, kw, want in CASES:
              r["lo"], r["hi"], "PASS" if ok else "  <<< FAIL"))
 
 # empty chute must read empty
-r = look(FakeImg([[L_METAL] * W for _ in range(H)],
-                 [[A_METAL] * W for _ in range(H)]))
+reset_reference()
+_e = FakeImg([[L_METAL] * W for _ in range(H)], [[A_METAL] * W for _ in range(H)])
+for _ in range(mod["REF_WARMUP"] + 2):
+    look(_e)
+r = look(_e)
 ok = r["reason"] in ("empty", "metal")
 fails += 0 if ok else 1
 print("%-24s -> %-11s %s" % ("empty chute", r["reason"],

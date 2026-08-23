@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v19.py         <- highest number = current
+  open_mv_v20.py         <- highest number = current
+  open_mv_v19.py
   open_mv_v18.py
   open_mv_v17.py
   open_mv_v16.py
@@ -74,7 +75,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v19.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v20.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -88,11 +89,10 @@ always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
    (`l_mean - DARK_K*l_stdev`, clamped `DARK_L_MIN..DARK_L_MAX`); set a fixed int
    for production. Shown on screen as `L<=NN AUTO/SET`. A second, looser limit
    (`lim + STALK_L_EXTRA`) is what makes the pale stalk visible.
-2. **Empty-channel floor removed.** The smallest band value in the channel is
-   subtracted from every band (at both brightness limits), capped by
-   `BASELINE_MAX`. **Extent** = bands with the corrected value `>= BAND_ON`
-   (0.06, deliberately low).
-3. **Presence gates:** `MIN_CHILI_STD` (an empty chute is smooth) and
+2. **Empty-chute reference removed, per band.** `ref[i]` is a running minimum of
+   each band with a slow upward leak (`REF_LEAK`); `prof = raw - ref`. **Extent**
+   = bands with the corrected value `>= BAND_ON` (0.06, deliberately low).
+3. **Presence gates:** `MIN_BODY_BANDS` on the reference-subtracted profile, and
    `MIN_CHILI_RED` against bare-metal shadow. Colour is a *presence* test only —
    it must never *reject* a candidate, because a pink cloth reads redness 20–40
    while a dark dried chilli reads 4–8.
@@ -115,19 +115,34 @@ always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
    `MAX_WAIT_MS` timeout it emits `DEFAULT_ANSWER` marked `[LOW CONFIDENCE]`
    rather than stalling the line.
 
-### The empty-channel floor (v19) — the one that actually bit on the machine
-`CHANNEL_ROI` slightly wider than the bright chute catches the **dark rails down
-each side**. They sit in *every* band, so every band looks partly full: the pod
-appears to fill the whole channel, `lo` is always 0 so the "has it reached the
-stopper" check can never fire, and taper ends up comparing two lengths of rail
-with some chilli in one of them. On the machine a stem-first pod locked APEX five
-times running with taper stuck at −0.26…−0.70 and the body box covering the whole
-channel while the pod filled only the top third.
+### The empty-chute reference (v19–v20) — what actually bit on the machine
+Anything dark inside `CHANNEL_ROI` that is not chilli gets counted as chilli.
+Two things always are:
 
-The rails contribute equally to every band, so `min(prof)` **is** that floor and
-subtracting it removes them exactly. `BASELINE_MAX` guards the case where the
-channel is genuinely full end to end. A floor above `FLOOR_WARN` draws
-`ROI TOO WIDE` on screen — it still works, but the ROI wants narrowing.
+- **The rails down each side**, when the ROI is a touch wider than the bright
+  chute. Dark in *every* band.
+- **The stopper bar**, when the ROI reaches over it. Dark in the *last band
+  only* — and that band is band 0, the stopper end.
+
+The second is the nastier one: with the bar in band 0, `lo` is always 0, so "has
+it reached the stopper" is always true even with the pod still short of the bar,
+and `w_near` is inflated by the bar so taper is pushed toward STEM on every
+chilli. v11 hit the same hardware from a different angle.
+
+v19 subtracted a single floor (`min(prof)`), which handles the rails but **cannot
+handle the bar** — a single number cannot remove something that is dark in only
+some bands. v20 learns the reference **per band** as a running minimum with a slow
+upward leak: every band is empty at some point between chillies, so its smallest
+recent value is its empty reading. This subsumes rails, bar, and any fixed
+shadow. A mean reference above `FLOOR_WARN` draws `ROI TOO WIDE` on screen.
+
+**Start with an empty chute.** The first `REF_WARMUP` frames report
+`LEARNING EMPTY CHUTE`.
+
+⚠️ **Do not add an early return for "the channel looks smooth so it is empty".**
+There was one in `object_threshold`, and it *also* skipped learning the
+reference — at the one moment the reference can be learned. Emptiness is decided
+after the reference is subtracted, which is later and far more reliable.
 
 **Redness as an end-comparison is off (`W_RED = 0`) and should stay off.** With
 rails in the ROI the dark rail pixels pass the dark threshold and carry no
@@ -171,13 +186,25 @@ Neither raises an error; both invert every answer.
 - **`INVERT_ANSWER`** — with `CALIBRATE = True`, a stem-first chilli must print a
   POSITIVE score. If it is negative, set this True. That is the whole fix.
 
+### Reading the measurement directly
+`CALIBRATE = True` + `SHOW_PROFILE = True` prints the profile band by band —
+`raw`, the learned `ref`, what is left, and which band the pod starts and ends
+on, with **band 0 always the stopper end**. Use this instead of inferring
+geometry from a screenshot of the frame buffer; that has been wrong more than
+once, and the user has (rightly) objected to the time it costs.
+
 ### Offline test
 `manual2/test_offline.py` runs the detector on synthetic chillies on a PC
 with the camera modules stubbed — both directions, short/long/off-centre pods,
 noisy lighting, a pod still sliding, an empty chute. `python
 manual2/test_offline.py` after any threshold change; it catches an inverted
 or dead cue in a second. It found all three bugs listed above before the code
-ever reached the camera.
+ever reached the camera, and its rails/stopper-bar cases reproduce the exact
+conditions the real machine was in.
+
+⚠️ The version number lives in ONE place, the `VERSION` constant, because the
+banner used to carry a hardcoded copy and went stale — the terminal said
+VERSION 18 while v19 was running, which cost a debugging round.
 
 ### What has been tried and abandoned
 - **Fixed colour ranges to find the chilli** (v1–v7) — broke whenever light changed.
