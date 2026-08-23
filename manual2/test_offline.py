@@ -50,7 +50,7 @@ STOP_Y = CH_Y + CH_H - 2          # the chilli rests here (bottom = stopper)
 
 
 def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
-          off=0, noise=0.0):
+          off=0, noise=0.0, rails=0):
     """Return (L, A) images.
 
     stem_first  fat shoulder at the stopper end, point away from it
@@ -58,6 +58,9 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
     stalk       length of the pale stalk in pixels, 0 for a de-stemmed pod
     fat/thin    half-width at the shoulder and at the point
     off         sideways offset in the channel
+    rails       px of dark rail just inside each ROI edge - i.e. CHANNEL_ROI
+                set slightly wider than the bright chute, which is what the
+                machine was actually doing
     """
     Limg = [[L_METAL] * W for _ in range(H)]
     Aimg = [[A_METAL] * W for _ in range(H)]
@@ -66,6 +69,11 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
         for y in range(CH_Y, CH_Y + CH_H):
             for x in range(CH_X, CH_X + CH_W):
                 Limg[y][x] += rnd.uniform(-noise, noise)
+
+    if rails:
+        for y in range(CH_Y, CH_Y + CH_H):
+            for x in list(range(CH_X, CH_X + rails)) +                      list(range(CH_X + CH_W - rails, CH_X + CH_W)):
+                Limg[y][x] = L_BODY + 6.0
 
     cx = CX + off
     y_bot = STOP_Y - gap
@@ -136,9 +144,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v18.py")).read()
+src = open(os.path.join(here, "open_mv_v19.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v18.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v19.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -160,6 +168,17 @@ CASES = [
     ("still sliding down",       dict(stem_first=True,  gap=40),           "sliding"),
     ("barely-tapered pod",       dict(stem_first=True,  fat=8.0, thin=7.4,
                                       stalk=0),                            "WEAK"),
+    # what the machine was actually seeing: ROI a bit wider than the chute, so
+    # dark rails sit in every band
+    ("stem first + dark rails",  dict(stem_first=True,  rails=4),          "STEM"),
+    ("apex first + dark rails",  dict(stem_first=False, rails=4),          "APEX"),
+    ("short pod + dark rails",   dict(stem_first=True,  rails=4,
+                                      body_len=48),                        "STEM"),
+    # pod resting against the opposite end = STOPPER_SIDE is wrong
+    ("pod short of stopper",    dict(stem_first=True,  gap=52,
+                                      body_len=48),                    "sliding"),
+    ("pod short + rails",       dict(stem_first=True,  gap=52, body_len=48,
+                                      rails=4),                        "sliding"),
 ]
 
 fails = 0

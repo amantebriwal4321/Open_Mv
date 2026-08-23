@@ -38,11 +38,12 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v18.py         <- highest number = current
+  open_mv_v19.py         <- highest number = current
+  open_mv_v18.py
   open_mv_v17.py
   open_mv_v16.py
   ...
-  test_v18_offline.py    <- runs the detector on a PC, no camera needed
+  test_offline.py        <- runs the detector on a PC, no camera needed
   README.md              <- version table, setup order, threshold guide
 open_mv2.py              <- working copy, same as the highest version
 ```
@@ -73,7 +74,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v18.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v19.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -87,7 +88,10 @@ always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
    (`l_mean - DARK_K*l_stdev`, clamped `DARK_L_MIN..DARK_L_MAX`); set a fixed int
    for production. Shown on screen as `L<=NN AUTO/SET`. A second, looser limit
    (`lim + STALK_L_EXTRA`) is what makes the pale stalk visible.
-2. **Extent** = bands with `dark_fraction >= BAND_ON` (0.06, deliberately low).
+2. **Empty-channel floor removed.** The smallest band value in the channel is
+   subtracted from every band (at both brightness limits), capped by
+   `BASELINE_MAX`. **Extent** = bands with the corrected value `>= BAND_ON`
+   (0.06, deliberately low).
 3. **Presence gates:** `MIN_CHILI_STD` (an empty chute is smooth) and
    `MIN_CHILI_RED` against bare-metal shadow. Colour is a *presence* test only —
    it must never *reject* a candidate, because a pink cloth reads redness 20–40
@@ -101,7 +105,7 @@ always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
    | taper | 1.6 | mean profile over the near third > the far third |
    | stalk | 1.0 | pale bands run past that end (see caveat below) |
    | centroid | 0.5 | profile mass sits toward that end |
-   | redness | 0.3 | that end is paler |
+   | redness | **0.0 — off** | measured and logged, but not voted with |
 
    A cue that does not fire is left **out of the weight total**, so it cannot
    dilute the ones that did.
@@ -110,6 +114,34 @@ always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
    disagree), answer held until the chilli leaves, then `EMPTY`. On
    `MAX_WAIT_MS` timeout it emits `DEFAULT_ANSWER` marked `[LOW CONFIDENCE]`
    rather than stalling the line.
+
+### The empty-channel floor (v19) — the one that actually bit on the machine
+`CHANNEL_ROI` slightly wider than the bright chute catches the **dark rails down
+each side**. They sit in *every* band, so every band looks partly full: the pod
+appears to fill the whole channel, `lo` is always 0 so the "has it reached the
+stopper" check can never fire, and taper ends up comparing two lengths of rail
+with some chilli in one of them. On the machine a stem-first pod locked APEX five
+times running with taper stuck at −0.26…−0.70 and the body box covering the whole
+channel while the pod filled only the top third.
+
+The rails contribute equally to every band, so `min(prof)` **is** that floor and
+subtracting it removes them exactly. `BASELINE_MAX` guards the case where the
+channel is genuinely full end to end. A floor above `FLOOR_WARN` draws
+`ROI TOO WIDE` on screen — it still works, but the ROI wants narrowing.
+
+**Redness as an end-comparison is off (`W_RED = 0`) and should stay off.** With
+rails in the ROI the dark rail pixels pass the dark threshold and carry no
+redness, so the reading becomes "how much rail is in this band" — the taper
+again, inverted. In the rail test case it votes −0.63 against a true taper of
++0.52; dropping it took that case from +0.37 to +0.51. Colour remains a
+**presence** test only.
+
+### Wrong STOPPER_SIDE cannot be seen in one frame
+A long pod half way down the channel also reaches the far edge, so position
+alone cannot separate "still sliding" from "watching the wrong end". Only time
+can: the main loop tracks `lo`, and a pod that has not moved for `STUCK_MS`
+(2.5 s) while short of the stopper raises **CHECK STOPPER SIDE** on screen and
+prints the explanation once. Keep this in the loop, not in `look()`.
 
 ### Three bugs the profile rewrite exposed (do not reintroduce)
 - **The apex never registered.** Measured at the old body threshold (0.30) the
@@ -140,10 +172,10 @@ Neither raises an error; both invert every answer.
   POSITIVE score. If it is negative, set this True. That is the whole fix.
 
 ### Offline test
-`manual2/test_v18_offline.py` runs the detector on synthetic chillies on a PC
+`manual2/test_offline.py` runs the detector on synthetic chillies on a PC
 with the camera modules stubbed — both directions, short/long/off-centre pods,
 noisy lighting, a pod still sliding, an empty chute. `python
-manual2/test_v18_offline.py` after any threshold change; it catches an inverted
+manual2/test_offline.py` after any threshold change; it catches an inverted
 or dead cue in a second. It found all three bugs listed above before the code
 ever reached the camera.
 
@@ -155,7 +187,9 @@ ever reached the camera.
   channel, and the blob kept merging with nearby shadow, which made the wrong
   end look fat.
 - **Tuning the weights to fix a wrong answer** (v10–v17) — seven versions of it
-  never worked. The fault was in the measurement, not the weighting.
+  never worked. The fault was in the measurement, not the weighting. When an
+  answer is inverted or constant, print each cue's sign against a known-truth
+  input before touching a single weight.
 
 ### Outputs
 `P0` = stem arrived first · `P1` = tip (apex) arrived first · `P2` = rotate 180°.
@@ -184,7 +218,7 @@ These caused a string of early crashes. Helpers exist — use them:
 - **Do not tune thresholds from screenshots.** This wasted a lot of time: each set of numbers
   fixed one bench scene (keyboard, wood, paper, phone screen) and broke on the next. Tune once
   on the **real machine** with its fixed lighting.
-- **Run `python manual2/test_v18_offline.py`** after touching any threshold or weight. It
+- **Run `python manual2/test_offline.py`** after touching any threshold or weight. It
   exercises the detector on synthetic chillies with the camera stubbed out and catches an
   inverted or dead cue in a second.
 - **When it reports EMPTY, read the `CALIB` line** — `bands lo-hi`, `a=`, `L<=` say whether
