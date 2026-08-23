@@ -50,7 +50,8 @@ STOP_Y = CH_Y + CH_H - 2          # the chilli rests here (bottom = stopper)
 
 
 def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
-          off=0, noise=0.0, rails=0, bar=0, stalk_L=None):
+          off=0, noise=0.0, rails=0, bar=0, stalk_L=None,
+          flip_taper=False):
     """Return (L, A) images.
 
     stem_first  fat shoulder at the stopper end, point away from it
@@ -65,6 +66,10 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
                 limit. Set it darker (e.g. 44) for the real case seen on the
                 machine, where the stalk passed the body threshold and was
                 swallowed into the pod, then read as a tapering apex.
+    flip_taper  make the FLESH taper the wrong way while leaving the stalk on
+                the stem end. Physically odd for a perfect pod, but it is what
+                the machine reported (taper -0.25 with the stalk at the
+                stopper), and it is the case where only the stalk is right.
     bar         px of dark STOPPER BAR inside the bottom edge of the ROI - i.e.
                 CHANNEL_ROI reaching a little past the stopper. Only darkens
                 the last band or two, so a single floor cannot remove it.
@@ -93,7 +98,8 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
 
     for y in (range(y_top, y_bot + 1) if body_len > 0 else ()):
         t = (y_bot - y) / float(body_len)        # 0 at the stopper, 1 far away
-        hw = (fat * (1.0 - t) + thin * t) if stem_first else (thin * (1.0 - t) + fat * t)
+        fat_at_stopper = stem_first != flip_taper
+        hw = (fat * (1.0 - t) + thin * t) if fat_at_stopper             else (thin * (1.0 - t) + fat * t)
         for x in range(int(cx - hw), int(cx + hw) + 1):
             if CH_X <= x < CH_X + CH_W:
                 Limg[y][x], Aimg[y][x] = L_BODY, A_BODY
@@ -157,9 +163,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v21.py")).read()
+src = open(os.path.join(here, "open_mv_v22.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v21.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v22.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -223,6 +229,24 @@ CASES = [
     # and not just as "something near the stopper".
     ("apex-first, same gap",     dict(stem_first=False, stalk_L=44, gap=20,
                                       body_len=76),                   "sliding"),
+    # v22: a PALE stalk - too bright for the body limit, so it exists only in
+    # the loose profile. This is the path that was still using a single-number
+    # floor, and it is why a pod with its stalk pointing at the stopper read
+    # APEX with stalk -1. The flesh here is deliberately FATTER away from the
+    # stopper, so taper votes APEX and only the stalk can get it right.
+    ("pale stalk at stopper",    dict(stem_first=True,  gap=20,
+                                      body_len=76),                     "STEM"),
+    ("pale stalk + stopper bar", dict(stem_first=True,  gap=20, bar=8,
+                                      body_len=76),                     "STEM"),
+    ("pale stalk + rails",       dict(stem_first=True,  gap=20, rails=4,
+                                      body_len=76),                     "STEM"),
+    # THE case from the machine: the stalk points at the stopper but the flesh
+    # is fatter AWAY from it, so taper votes APEX and is honestly wrong. Only
+    # the stalk knows better, so the stalk has to outvote it.
+    ("stalk right, taper wrong", dict(stem_first=True,  gap=20, body_len=76,
+                                      flip_taper=True),                 "STEM"),
+    ("mirror: apex at stopper",  dict(stem_first=False, gap=2,  body_len=76,
+                                      flip_taper=True),                 "APEX"),
 ]
 
 reset_reference = mod["reset_reference"]

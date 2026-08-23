@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v21.py         <- highest number = current
+  open_mv_v22.py         <- highest number = current
+  open_mv_v21.py
   open_mv_v20.py
   open_mv_v19.py
   open_mv_v18.py
@@ -76,7 +77,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v21.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v22.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -103,7 +104,7 @@ always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
 
    | Cue | Weight | Says STEM when… |
    |---|---|---|
-   | stalk | 1.6 | pod-but-not-flesh bands sit at that end |
+   | stalk | 2.4 | pod-but-not-flesh bands sit at that end |
    | taper | 1.3 | mean FLESH profile over the near third > the far third |
    | centroid | 0.5 | flesh mass sits toward that end |
    | redness | **0.0 — off** | measured and logged, but not voted with |
@@ -134,6 +135,32 @@ flesh **are** the stalk.
 - The stalk cue is now **two-sided** (it can vote either way), so it leads the
   vote. The v18 rule that it must stay below taper applied only while it was
   one-sided.
+
+### Three extents, and which is for what (v22)
+Getting these mixed up caused real bugs, twice:
+
+| extent | from | used for |
+|---|---|---|
+| `lo_a`/`hi_a` → `lo`/`hi` | **loose** profile (anything at all) | has it reached the stopper; the outer ends of the stalk |
+| `lo_d`/`hi_d` | **dark** profile | the drawn box, and the redness presence test |
+| `lo_f`/`hi_f` | **flesh** profile | taper and centroid |
+
+The stalk is then just `lo_f - lo` at the near end and `hi - hi_f` at the far
+end — one expression covering both a stalk dark enough to pass the body limit
+and a pale one visible only in the loose profile.
+
+⚠️ **Arrival must be judged on the LOOSE extent.** Judged on the dark extent, a
+pod resting on a pale stalk appears to begin at its flesh, three bands up, so it
+is called "still sliding" and never judged — on precisely the pods whose stalk is
+easiest to see.
+
+⚠️ **Every profile needs its own per-band reference** (`ref`, `ref_t`, `ref2`).
+The loose one was left on v19's single-number floor until v22, and that is why
+the stalk cue read `-1` on a pod whose stalk was plainly at the stopper.
+
+`W_STALK` (2.4) is above `W_TAPER` (1.3) on purpose: taper can be honestly wrong
+when the flesh is fatter away from the stopper, and only the stalk knows better.
+There is a test for exactly that (`stalk right, taper wrong`).
 
 ### The AUTO threshold is learned once and held (v21)
 `lim` used to be recomputed from every frame. That is circular - the chilli
