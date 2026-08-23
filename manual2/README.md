@@ -7,7 +7,8 @@ version stays on record and you can always go back to one that worked.
 
 | File | Version | What changed |
 |---|---|---|
-| `open_mv_v20.py` | 20 | **Current.** The empty-chute reference is now learned **per band**, as a running minimum. v19's single floor removed the rails down the sides (dark in every band) but could not remove the **stopper bar** inside the bottom edge of the ROI, which is dark in the last band only — so band 0 was always full, `lo` was always 0, "has it reached the stopper" was always true even with the pod short of the bar, and taper was pushed toward STEM on every chilli. Also: `SHOW_PROFILE` prints the whole measurement band by band as text, the version is a single constant so the banner can no longer disagree with the header, and the "channel is smooth so it must be empty" shortcut is gone (it skipped learning the reference at the one moment it could be learned). |
+| `open_mv_v21.py` | 21 | **Current.** Tells the **stalk from the flesh by brightness**, not by width. A stalk dark enough to pass the body limit used to be swallowed into the pod, and taper then read it as "this end is thinner" - i.e. as an apex. That is how a pod lying stalk-down toward the stopper locked APEX at -0.73. The profile is now measured at two limits: `lim` for anything at all, `lim_t` for flesh only. What lies between them is stalk, at whichever end it sits. Taper and centroid use the flesh alone; "reached the stopper" still uses the whole pod, stalk included. The stalk cue is now two-sided so it leads the vote. Also: the AUTO threshold is learned from the empty chute and **held**, instead of being recomputed from a frame that has a chilli in it - that was circular, and it silently invalidated the reference. |
+| `open_mv_v20.py` | 20 | The empty-chute reference is now learned **per band**, as a running minimum. v19's single floor removed the rails down the sides (dark in every band) but could not remove the **stopper bar** inside the bottom edge of the ROI, which is dark in the last band only — so band 0 was always full, `lo` was always 0, "has it reached the stopper" was always true even with the pod short of the bar, and taper was pushed toward STEM on every chilli. Also: `SHOW_PROFILE` prints the whole measurement band by band as text, the version is a single constant so the banner can no longer disagree with the header, and the "channel is smooth so it must be empty" shortcut is gone (it skipped learning the reference at the one moment it could be learned). |
 | `open_mv_v19.py` | 19 | Subtracts the **empty-channel floor** from every band. A `CHANNEL_ROI` slightly wider than the bright chute catches the dark rails down each side; those sit in every band, so the pod appeared to fill the whole channel, `lo` was always 0 (the "reached the stopper" check could never fire) and taper compared two lengths of rail. That is what made a stem-first pod lock APEX five times running. Also: a pod that sits still short of the stopper for 2.5 s now says **CHECK STOPPER SIDE** instead of "still moving" forever, and the redness end-comparison is switched off (`W_RED = 0`) because with rails in the ROI it votes against the truth. |
 | `open_mv_v18.py` | 18 | Rewrote the measurement as a **width profile** along the channel instead of two small boxes at the ends, and fixed three bugs the profile exposed: the pointed apex never registered as "chilli" so apex-first pods were never judged; the tapering tip was being read as a stalk on every stem-first pod; and redness averaged over the whole box was really measuring bare metal, i.e. the taper inverted, so the colour cue fought the main cue. Adds `INVERT_ANSWER`, a "still sliding" state, and an offline test (`test_offline.py`). |
 | `open_mv_v17.py` | 17 | Color Presence Gate (`MIN_CHILI_RED = 6.0`): Rejects bare metal shadows on aluminum chute (which have `a_mean < 4.0`), eliminating phantom chilli detections and correctly displaying `STOPPER: EMPTY` when container is empty. |
@@ -81,20 +82,30 @@ With `CALIBRATE = True` and `SHOW_PROFILE = True`, the terminal prints the whole
 measurement as text every 20 frames:
 
 ```
-  band | raw  ref  = pod | width
-    0  | 0.31 0.29 = 0.02 |                        <-- STOPPER (bottom)
-    1  | 0.74 0.30 = 0.44 | #########   [pod starts]
+  band | pod  flesh | width          (flesh = pod minus stalk)
+    0  | 0.00 0.00  |                     <-- STOPPER (bottom)
+    1  | 0.11 0.00  | ##      << STALK  [pod starts]
+    2  | 0.12 0.00  | ##      << STALK
+    3  | 0.62 0.62  | ############       [flesh starts]
    ...
-   15  | 0.38 0.28 = 0.10 | ##          [pod ends]
-   23  | 0.29 0.29 = 0.00 |                        <-- far end
-  near third 0.41   far third 0.12   taper +0.55 -> STEM at stopper
+   16  | 0.08 0.08  | #                  [pod ends] [flesh ends]
+   23  | 0.00 0.00  |                     <-- far end
+  flesh near third 0.55  far third 0.18  taper +0.50 -> STEM at stopper
+  stalk bands: 2 at the stopper end, 0 at the far end -> STEM at stopper
 ```
 
-`raw` is what the camera saw, `ref` is the learned empty-chute value for that
-band, and `pod` is what is left. **Band 0 is always the stopper end.** If `ref`
-is large on band 0, the ROI is reaching over the stopper bar. If the pod does not
-start at band 0 or 1, it is not at the stopper. This readout settles arguments
-that squinting at the frame buffer cannot.
+`pod` is everything the chilli occupies; `flesh` is the dark red part only.
+Bands with pod but no flesh are the **stalk**, and are marked `<< STALK`.
+**Band 0 is always the stopper end.**
+
+Read it like this:
+
+- stalk bands near band 0 -> the stem end is at the stopper -> **STEM**
+- stalk bands near band 23 -> the stem is at the far end -> **APEX**
+- pod does not start at band 0 or 1 -> it has not reached the stopper
+- flesh never starts at all -> the threshold is too tight, or it is not a chilli
+
+This readout settles arguments that squinting at the frame buffer cannot.
 
 ### Checking it before you trust it
 

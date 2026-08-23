@@ -50,7 +50,7 @@ STOP_Y = CH_Y + CH_H - 2          # the chilli rests here (bottom = stopper)
 
 
 def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
-          off=0, noise=0.0, rails=0, bar=0):
+          off=0, noise=0.0, rails=0, bar=0, stalk_L=None):
     """Return (L, A) images.
 
     stem_first  fat shoulder at the stopper end, point away from it
@@ -61,6 +61,10 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
     rails       px of dark rail just inside each ROI edge - i.e. CHANNEL_ROI
                 set slightly wider than the bright chute, which is what the
                 machine was actually doing
+    stalk_L     brightness of the stalk. The default is PALER than the body
+                limit. Set it darker (e.g. 44) for the real case seen on the
+                machine, where the stalk passed the body threshold and was
+                swallowed into the pod, then read as a tapering apex.
     bar         px of dark STOPPER BAR inside the bottom edge of the ROI - i.e.
                 CHANNEL_ROI reaching a little past the stopper. Only darkens
                 the last band or two, so a single floor cannot remove it.
@@ -103,7 +107,8 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
                 continue
             for x in range(cx - 2, cx + 3):
                 if CH_Y <= y < CH_Y + CH_H and CH_X <= x < CH_X + CH_W:
-                    Limg[y][x], Aimg[y][x] = L_STALK, A_STALK
+                    Limg[y][x] = L_STALK if stalk_L is None else stalk_L
+                    Aimg[y][x] = A_STALK
     return Limg, Aimg
 
 
@@ -152,9 +157,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v20.py")).read()
+src = open(os.path.join(here, "open_mv_v21.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v20.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v21.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -196,6 +201,28 @@ CASES = [
     # the pod stops short of the bar: must NOT be judged as if it had arrived
     ("short of the bar",         dict(stem_first=True,  bar=8, gap=46,
                                       body_len=48),                     "sliding"),
+    # the case photographed on the machine: a DARK stalk, dark enough to pass
+    # the body limit, pointing at the stopper. v20 swallowed it into the pod and
+    # read it as a tapering apex, locking APEX at -0.73 on a stem-first pod.
+    ("dark stalk, stem first",   dict(stem_first=True,  stalk_L=44),     "STEM"),
+    ("dark stalk, apex first",   dict(stem_first=False, stalk_L=44),     "APEX"),
+    ("dark stalk + rails",       dict(stem_first=True,  stalk_L=44,
+                                      rails=4),                          "STEM"),
+    ("dark stalk + bar",         dict(stem_first=True,  stalk_L=44,
+                                      bar=8),                            "STEM"),
+    ("dark stalk, long",         dict(stem_first=True,  stalk_L=44,
+                                      body_len=110),                     "STEM"),
+    # exactly the frame photographed on the machine: pod sitting back from the
+    # bar with its DARK stalk pointing at the stopper, so the stalk is fully
+    # inside the ROI. v20 read the stalk as a tapering apex and locked APEX.
+    ("stalk points at stopper",  dict(stem_first=True,  stalk_L=44, gap=20,
+                                      body_len=76),                      "STEM"),
+    # the mirror: apex-first with the same gap has NOTHING bridging it (the
+    # stalk is at the far end), so it genuinely has not arrived and must not be
+    # judged. This is the pair that proves the stalk is being read as a stalk
+    # and not just as "something near the stopper".
+    ("apex-first, same gap",     dict(stem_first=False, stalk_L=44, gap=20,
+                                      body_len=76),                   "sliding"),
 ]
 
 reset_reference = mod["reset_reference"]

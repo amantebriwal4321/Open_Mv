@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v20.py         <- highest number = current
+  open_mv_v21.py         <- highest number = current
+  open_mv_v20.py
   open_mv_v19.py
   open_mv_v18.py
   open_mv_v17.py
@@ -75,7 +76,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v20.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v21.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -102,9 +103,9 @@ always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
 
    | Cue | Weight | Says STEM when… |
    |---|---|---|
-   | taper | 1.6 | mean profile over the near third > the far third |
-   | stalk | 1.0 | pale bands run past that end (see caveat below) |
-   | centroid | 0.5 | profile mass sits toward that end |
+   | stalk | 1.6 | pod-but-not-flesh bands sit at that end |
+   | taper | 1.3 | mean FLESH profile over the near third > the far third |
+   | centroid | 0.5 | flesh mass sits toward that end |
    | redness | **0.0 — off** | measured and logged, but not voted with |
 
    A cue that does not fire is left **out of the weight total**, so it cannot
@@ -115,7 +116,39 @@ always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
    `MAX_WAIT_MS` timeout it emits `DEFAULT_ANSWER` marked `[LOW CONFIDENCE]`
    rather than stalling the line.
 
-### The empty-chute reference (v19–v20) — what actually bit on the machine
+### Stalk vs flesh: brightness, never width (v21)
+A stalk and a fine apex can be the **same width**, so width cannot separate them.
+Trying to caused the same bug twice in mirror image: v18 read a tapering tip as a
+stalk; v20 read a stalk as a tapering tip and locked APEX at -0.73 on a pod lying
+stalk-down toward the stopper.
+
+Brightness does separate them - flesh is deep red and dark, a dried stalk is
+pale. The profile is measured at **two** limits: `lim` (anything at all) and
+`lim_t = lim * TIGHT_FRAC` (flesh only). Bands the pod occupies that hold no
+flesh **are** the stalk.
+
+- **Taper and centroid use the flesh alone.** A stalk in that comparison reads as
+  "this end is thinner", i.e. as an apex.
+- **"Reached the stopper" uses the whole pod**, stalk included - a stem-first
+  chilli rests on its stalk and has genuinely arrived.
+- The stalk cue is now **two-sided** (it can vote either way), so it leads the
+  vote. The v18 rule that it must stay below taper applied only while it was
+  one-sided.
+
+### The AUTO threshold is learned once and held (v21)
+`lim` used to be recomputed from every frame. That is circular - the chilli
+darkens the channel, which lowers the threshold, which changes how the chilli is
+measured - and worse, it silently invalidates the empty-chute reference, which
+was learned at a *different* threshold. Subtracting it then leaves a constant
+error in every band. This is what broke the rails test cases: the flesh profile
+came out ~0.25 low everywhere, the fine apex tip vanished into that error, and
+was reported as a five-band stalk.
+
+`lim` is now averaged over the warm-up frames and **held**, then nudged
+(`LIM_ADAPT`) only on frames that read empty. Lighting drift is followed; the
+chilli itself never moves it.
+
+### The empty-chute reference (v19-v20) - what actually bit on the machine
 Anything dark inside `CHANNEL_ROI` that is not chilli gets counted as chilli.
 Two things always are:
 
