@@ -38,12 +38,13 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v17.py   <- highest number = current
+  open_mv_v18.py         <- highest number = current
+  open_mv_v17.py
   open_mv_v16.py
-  open_mv_v15.py
   ...
-  README.md        <- version table + the threshold guide
-open_mv2.py        <- working copy, same as the highest version
+  test_v18_offline.py    <- runs the detector on a PC, no camera needed
+  README.md              <- version table, setup order, threshold guide
+open_mv2.py              <- working copy, same as the highest version
 ```
 
 ### How to save an updated version (follow this every time)
@@ -72,55 +73,92 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v17.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v18.py`.
 
-1. **Find the chilli by darkness.** The channel metal is bright, the chilli is dark.
-   `MANUAL_L = None` measures the dividing line from each frame (`l_mean - DARK_K*l_stdev`,
-   clamped to `DARK_L_MIN..DARK_L_MAX`, currently capped at **50** so shadows on aluminium
-   are excluded). Set `MANUAL_L` to a fixed number for production — repeatable, testable,
-   and adjustable by a technician. The line in use is drawn on screen as `L<=NN AUTO/SET`.
-2. **Two presence gates before anything is judged:**
-   - `MIN_CHILI_STD = 6.0` — an empty chute is uniformly bright; anything lying in it
-     breaks that up.
-   - `MIN_CHILI_RED = 6.0` — bare-metal shadows read `a_mean < 4`, a chilli reads higher.
-     **Note the nuance:** colour still cannot answer *"which end is the stem"*, and it must
-     never be used to *reject* a candidate outright — a pink cloth reads redness 20–40 while
-     a dark dried chilli reads 4–8, so a rejection threshold that admits real chillies also
-     admits brighter objects. It is only safe here as a *presence* gate against shadow.
-3. **Follow the chilli's own axis** (`min_corners`, bounding-box fallback) — any angle works.
-4. **Four relative end-comparisons**, weights in the config:
+The channel is a narrow strip, so a chilli lying in it is always lined up with
+it. v18 uses that: instead of hunting for a blob and measuring two small boxes
+at its ends, it slices the channel into `BANDS = 24` bands across the short side
+and measures how dark each band is. That gives a **width profile** of the pod
+from one end to the other — its actual shape, not two samples of it. Index 0 is
+always the stopper end (`band_roi` reverses the order when `STOPPER_SIDE` is
+`bottom`/`right`), so a positive score always means STEM.
+
+1. **Brightness line.** `MANUAL_L = None` measures it per frame
+   (`l_mean - DARK_K*l_stdev`, clamped `DARK_L_MIN..DARK_L_MAX`); set a fixed int
+   for production. Shown on screen as `L<=NN AUTO/SET`. A second, looser limit
+   (`lim + STALK_L_EXTRA`) is what makes the pale stalk visible.
+2. **Extent** = bands with `dark_fraction >= BAND_ON` (0.06, deliberately low).
+3. **Presence gates:** `MIN_CHILI_STD` (an empty chute is smooth) and
+   `MIN_CHILI_RED` against bare-metal shadow. Colour is a *presence* test only —
+   it must never *reject* a candidate, because a pink cloth reads redness 20–40
+   while a dark dried chilli reads 4–8.
+4. **Must be at the stopper:** `lo <= STOPPER_TOUCH_BANDS`, else `CHILLI STILL
+   MOVING` and no decision.
+5. **Four cues**, all comparisons within the same chilli:
+
    | Cue | Weight | Says STEM when… |
    |---|---|---|
-   | centroid shift | 1.5 | the mass sits toward that end |
-   | thickness | 1.2 | that end is fatter |
-   | redness | 0.6 | that end is paler |
-   | stalk | 0.4 | pale stalk pokes out past that end |
+   | taper | 1.6 | mean profile over the near third > the far third |
+   | stalk | 1.0 | pale bands run past that end (see caveat below) |
+   | centroid | 0.5 | profile mass sits toward that end |
+   | redness | 0.3 | that end is paler |
 
-   All are comparisons **within the same chilli**, never absolute thresholds. Disagreement
-   between cues reduces confidence so a confusing chilli needs more frames before locking.
-5. **Density, not raw counts** (pixels ÷ area). Boxes at the frame edge get clipped and the
-   stopper end is at the edge by definition — raw counts biased every decision toward APEX.
-6. **Every measuring box is clipped to `CHANNEL_ROI`.** The stopper bar sits just past the
-   stopper end and is dark; unclipped, the stalk check read that hardware as a stalk on
-   *every* chilli and pushed nearly all answers to STEM.
-7. **`BLOB_MARGIN = 2`** keeps the blob tight to the body so it never merges with a nearby
-   shadow — a merged shadow makes the wrong end look fat, which corrupts the main cue.
-8. **State machine** WAIT → CHECK → LOCKED → CLEARING, score averaged over
-   `VOTE_HISTORY_MAX = 7` frames and held for `STABLE_N = 4`, gives one locked answer
-   per chilli.
+   A cue that does not fire is left **out of the weight total**, so it cannot
+   dilute the ones that did.
+6. **State machine** WAIT → CHECK → LOCKED → CLEARING. Score averaged over
+   `SMOOTH_N = 7` frames, `STABLE_N = 4` agreeing frames to lock (6 if cues
+   disagree), answer held until the chilli leaves, then `EMPTY`. On
+   `MAX_WAIT_MS` timeout it emits `DEFAULT_ANSWER` marked `[LOW CONFIDENCE]`
+   rather than stalling the line.
 
-**Only the dark BODY is detected — the pale stalk is not dark, so it is invisible to the
-detector.** Size gates must suit the body, not a whole chilli. Getting this wrong caused a
-long run of false `EMPTY` results.
+### Three bugs the profile rewrite exposed (do not reintroduce)
+- **The apex never registered.** Measured at the old body threshold (0.30) the
+  fine point of an apex-first pod filled too little of its bands to count as
+  chilli, so the pod looked like it had not reached the stopper and was judged
+  from the wrong place — or not at all. Hence `BAND_ON = 0.06`.
+- **The tapering tip read as a stalk**, on every stem-first pod, dragging the
+  answer to APEX. A stalk must be tested for being **pale** (present at the
+  loose limit, near-absent at the body limit — `BAND_TIP`), not merely thin.
+- **Redness measured the metal, not the chilli.** Averaged over the whole sample
+  box, `a_mean` mostly reports how much bare metal is in the box — which is the
+  taper again, inverted. It fought the main cue on every chilli. It must be read
+  with `get_statistics(thresholds=...)` so only chilli pixels count; if the
+  firmware will not filter, the cue is dropped rather than guessed.
+
+⚠️ **The stalk cue is one-sided.** `CHANNEL_ROI` stops at the stopper bar (it has
+to — the bar is dark, and v11 proved it reads as a stalk), so when a pod is hard
+against the stopper there is no room to see a stalk on the near side. The cue can
+realistically only vote APEX. That is sound evidence, but it is why `W_STALK`
+must stay below `W_TAPER`: a cue that can only vote one way must never lead, or
+every answer drifts that way.
+
+### The two settings that fail silently
+Neither raises an error; both invert every answer.
+- **`STOPPER_SIDE`** — the solid cyan bar drawn on screen must sit on the end the
+  chilli stops against.
+- **`INVERT_ANSWER`** — with `CALIBRATE = True`, a stem-first chilli must print a
+  POSITIVE score. If it is negative, set this True. That is the whole fix.
+
+### Offline test
+`manual2/test_v18_offline.py` runs the detector on synthetic chillies on a PC
+with the camera modules stubbed — both directions, short/long/off-centre pods,
+noisy lighting, a pod still sliding, an empty chute. `python
+manual2/test_v18_offline.py` after any threshold change; it catches an inverted
+or dead cue in a second. It found all three bugs listed above before the code
+ever reached the camera.
 
 ### What has been tried and abandoned
-- **Fixed colour ranges to find the chilli** (v1–v7) — broke every time the light changed.
-- **`AUTO_CHANNEL`, finding the bright chute automatically** (v13) — the chilli breaks the
-  bright strip in two, so the found region jumped around. Reverted in v14; a fixed
-  `CHANNEL_ROI` on the chute is what works.
+- **Fixed colour ranges to find the chilli** (v1–v7) — broke whenever light changed.
+- **`AUTO_CHANNEL`** (v13) — the chilli breaks the bright strip in two, so the
+  found region jumped around. A fixed `CHANNEL_ROI` is what works.
+- **Blob + `min_corners` + tilt gates** (v6–v17) — unnecessary in a narrow
+  channel, and the blob kept merging with nearby shadow, which made the wrong
+  end look fat.
+- **Tuning the weights to fix a wrong answer** (v10–v17) — seven versions of it
+  never worked. The fault was in the measurement, not the weighting.
 
 ### Outputs
-`P0` = stem arrived first · `P1` = tip (pod) arrived first · `P2` = rotate 180°.
+`P0` = stem arrived first · `P1` = tip (apex) arrived first · `P2` = rotate 180°.
 Mutually exclusive, written by one function. Blue LED blinks for stem, green for tip.
 
 ⚠️ Pins give **3.3 V at ~25 mA — a signal only**. They must drive a relay module or PLC
@@ -130,10 +168,14 @@ input, never a solenoid or cylinder directly. Most PLC inputs are 24 V and need 
 
 These caused a string of early crashes. Helpers exist — use them:
 - Accessors are inconsistently **methods or properties** → use `_get(obj, name)`.
-- Draw calls want **tuples for some, flat ints for others** → use `draw_safe(...)`.
+- Draw calls want **tuples for some, flat ints for others** → use `draw_rect(...)`.
 - `get_pixel` is unusable; `slice()` does not exist in MicroPython (use `lst[a:b]`).
-- `find_blobs(margin=...)` and `get_statistics(thresholds=...)` may be unsupported — both
-  are wrapped in `try/except` with fallbacks.
+- `get_statistics(thresholds=...)` may be unsupported. For the *end-comparison* redness
+  this is not something to fall back on — an unthresholded average measures bare metal, so
+  `region_redness` returns `None` and the cue drops out of the vote. `region_redness_any`
+  is the unthresholded version and is for presence checks only.
+- `get_histogram().bins()` drives `dark_fraction` — one call per band instead of 24
+  `find_blobs` calls. It falls back to blob counting if the histogram misbehaves.
 
 ## Working practice
 
@@ -142,9 +184,15 @@ These caused a string of early crashes. Helpers exist — use them:
 - **Do not tune thresholds from screenshots.** This wasted a lot of time: each set of numbers
   fixed one bench scene (keyboard, wood, paper, phone screen) and broke on the next. Tune once
   on the **real machine** with its fixed lighting.
-- **When it reports EMPTY, read the diagnostic line** — `blobs=`, `shape_ok=`, `best_tilt=`,
-  `L<=` say whether the chilli was seen at all and which gate rejected it.
-- `CALIBRATE = True` keeps all pins off; `DEBUG = True` draws the working boxes.
+- **Run `python manual2/test_v18_offline.py`** after touching any threshold or weight. It
+  exercises the detector on synthetic chillies with the camera stubbed out and catches an
+  inverted or dead cue in a second.
+- **When it reports EMPTY, read the `CALIB` line** — `bands lo-hi`, `a=`, `L<=` say whether
+  the chilli was seen at all and which gate rejected it.
+- `CALIBRATE = True` keeps all pins off and prints every cue; `DEBUG = True` draws the
+  channel, the cyan stopper bar, and the width profile as a bar chart beside the channel.
+- **Accuracy is not known until it is counted.** Twenty chillies, ten each way, tally the
+  wrong calls. Nothing before that is evidence.
 
 ## Setup that actually matters
 
@@ -154,12 +202,18 @@ Lighting and mounting decide accuracy far more than code:
 - **Bright channel, dark chilli.** Keep `CHANNEL_ROI` on the metal channel only — dark wood
   or table just outside it competes with the chilli for the darkness test.
 - **Fill the frame.** The chilli should occupy most of the channel view.
-- **`STOPPER_SIDE` is the one setting that fails silently.** Wrong value inverts every answer
-  with no error. The cyan box on screen must sit on the end touching the stopper.
+- **Flat lighting is what makes scores weak.** A score near ±0.1 means the two ends look
+  alike to the camera. Diffused light slightly off to one side gives the pod some shading
+  along its length, which is what the taper cue reads.
+- **Two settings fail silently** — see "The two settings that fail silently" above.
+  `STOPPER_SIDE` (cyan bar on the right end) and `INVERT_ANSWER` (stem-first must score
+  positive in CALIBRATE). Both invert every answer with no error.
 
 ## Deploying
 
-1. Calibrate on the machine (`CHANNEL_ROI`, `STOPPER_SIDE`, size gates) with `CALIBRATE = True`.
+1. Calibrate on the machine with `CALIBRATE = True`: `CHANNEL_ROI` on the metal only,
+   `STOPPER_SIDE` so the cyan bar is on the stopper end, then `INVERT_ANSWER` so a
+   stem-first chilli scores positive. Then fix `MANUAL_L`.
 2. Set `CALIBRATE = False`, `DEBUG = False`; confirm P0/P1 with a multimeter.
 3. Tools → Save open script to OpenMV Cam (as main.py), eject the drive, reset.
 4. Disconnect the IDE and reset again — `main.py` only auto-runs when the IDE is not attached.

@@ -7,7 +7,8 @@ version stays on record and you can always go back to one that worked.
 
 | File | Version | What changed |
 |---|---|---|
-| `open_mv_v17.py` | 17 | **Current.** Color Presence Gate (`MIN_CHILI_RED = 6.0`): Rejects bare metal shadows on aluminum chute (which have `a_mean < 4.0`), eliminating phantom chilli detections and correctly displaying `STOPPER: EMPTY` when container is empty. |
+| `open_mv_v18.py` | 18 | **Current.** Rewrote the measurement as a **width profile** along the channel instead of two small boxes at the ends, and fixed three bugs the profile exposed: the pointed apex never registered as "chilli" so apex-first pods were never judged; the tapering tip was being read as a stalk on every stem-first pod; and redness averaged over the whole box was really measuring bare metal, i.e. the taper inverted, so the colour cue fought the main cue. Adds `INVERT_ANSWER`, a "still sliding" state, and an offline test (`test_v18_offline.py`). |
+| `open_mv_v17.py` | 17 | Color Presence Gate (`MIN_CHILI_RED = 6.0`): Rejects bare metal shadows on aluminum chute (which have `a_mean < 4.0`), eliminating phantom chilli detections and correctly displaying `STOPPER: EMPTY` when container is empty. |
 | `open_mv_v16.py` | 16 | Fixed shadow-merge bias past stopper: set tight `CHANNEL_ROI = (200, 50, 28, 138)` stopping cleanly at the stopper bar, tightened `BLOB_MARGIN = 2` to prevent merging with table shadows, and capped `DARK_L_MAX = 50`. |
 | `open_mv_v15.py` | 15 | Introduced Mass Centroid Shift (`s_centroid`, W=1.5), `END_INSET = 0.25`, and balanced ensemble voting. |
 | `open_mv_v14.py` | 14 | Reverted `AUTO_CHANNEL` (v13 split/lost blobs with chilli present). Fixed narrow `CHANNEL_ROI = (186, 50, 36, 160)` centered on the chute. Smoothing increased (window 9, stable frames 5). |
@@ -15,6 +16,52 @@ version stays on record and you can always go back to one that worked.
 | `open_mv_v12.py` | 12 | `CHANNEL_ROI` moved to the middle of the picture, (90, 60, 140, 120) |
 | `open_mv_v11.py` | 11 | Fixed a bias that pushed nearly every answer to STEM: the stalk check was reading the stopper bar itself as "stalk". All measuring boxes are now kept inside the channel |
 | `open_mv_v10.py` | 10 | Manual / automatic threshold switch (`MANUAL_L`); the dividing line in use is shown on screen as `L<=NN AUTO` or `L<=NN SET` |
+
+## Setting it up on the machine — do these two first
+
+Everything else is fine-tuning. These two decide whether the answers are right
+or exactly backwards, and neither of them shows up as an error.
+
+### 1. Is the cyan bar on the right end?
+
+Run with `DEBUG = True`. A **solid cyan bar** is drawn across one end of the
+magenta channel box. That bar is where the code thinks the stopper is.
+
+It must sit on the end the chilli actually stops against. If it is on the wrong
+end, change `STOPPER_SIDE` (`"bottom"` `"top"` `"left"` `"right"`) until it moves
+there. Getting this wrong inverts every single answer with no warning.
+
+### 2. Is the answer the right way round?
+
+Set `CALIBRATE = True`. Pins stay off and the numbers print.
+
+1. Put a chilli in **stem first** — stem end touching the stopper.
+2. Read `score` in the terminal.
+   - **Positive** → correct. Leave `INVERT_ANSWER = False`.
+   - **Negative** → set `INVERT_ANSWER = True`. That is the whole fix.
+3. Put a chilli in **apex first** and check the score flips sign.
+4. Set `CALIBRATE = False`.
+
+A good chilli should read about **±0.4 or more**. Around ±0.1 means the two ends
+look nearly alike to the camera — usually flat lighting, so see below.
+
+### Checking it before you trust it
+
+Run twenty chillies, ten each way, and count the wrong ones. Until that has been
+done the accuracy is unknown. The `>>>` line printed for each chilli records the
+score and every cue, so a wrong call can be looked up afterwards.
+
+`test_v18_offline.py` runs the detector on drawn-on-screen chillies on a PC, with
+no camera:
+
+```bash
+python manual2/test_v18_offline.py
+```
+
+It checks both directions, short and long pods, off-centre pods, noisy lighting,
+a pod still sliding, and an empty chute. Run it after changing any threshold —
+it catches an inverted or dead cue in a second, which is faster than finding out
+at the machine.
 
 ## The threshold — the one number to adjust
 
