@@ -41,7 +41,7 @@ sys.modules["time"] = _time
 
 # ---- a synthetic scene ----
 W, H = 320, 240
-L_METAL, L_BODY, L_STALK = 80.0, 20.0, 55.0
+L_METAL, L_BODY, L_STALK = 86.0, 20.0, 55.0
 A_METAL, A_BODY, A_STALK = 0.0, 25.0, 10.0
 
 CH_X, CH_Y, CH_W, CH_H = 200, 50, 28, 138
@@ -163,9 +163,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v22.py")).read()
+src = open(os.path.join(here, "open_mv_v23.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v22.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v23.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -247,6 +247,17 @@ CASES = [
                                       flip_taper=True),                 "STEM"),
     ("mirror: apex at stopper",  dict(stem_first=False, gap=2,  body_len=76,
                                       flip_taper=True),                 "APEX"),
+    # v23: a VERY pale stalk, L 74 against an L 86 chute. The old loose limit
+    # was lim + 20 = 69, i.e. BRIGHTER than the stalk, so the stalk was never
+    # measured at all and the cue read +0 - which is what the machine showed.
+    ("very pale stalk",          dict(stem_first=True,  gap=20, body_len=76,
+                                      stalk_L=74),                       "STEM"),
+    ("very pale stalk + rails",  dict(stem_first=True,  gap=20, body_len=76,
+                                      stalk_L=74, rails=4),              "STEM"),
+    ("very pale, taper wrong",   dict(stem_first=True,  gap=20, body_len=76,
+                                      stalk_L=74, flip_taper=True),      "STEM"),
+    ("very pale, apex first",    dict(stem_first=False, gap=2,  body_len=76,
+                                      stalk_L=74),                       "APEX"),
 ]
 
 reset_reference = mod["reset_reference"]

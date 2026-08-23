@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v22.py         <- highest number = current
+  open_mv_v23.py         <- highest number = current
+  open_mv_v22.py
   open_mv_v21.py
   open_mv_v20.py
   open_mv_v19.py
@@ -77,7 +78,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v22.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v23.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -135,6 +136,26 @@ flesh **are** the stalk.
 - The stalk cue is now **two-sided** (it can vote either way), so it leads the
   vote. The v18 rule that it must stay below taper applied only while it was
   one-sided.
+
+### Thresholds come from the CHUTE, not from each other (v23)
+There are three limits, and it matters where each one is anchored:
+
+| limit | from | finds |
+|---|---|---|
+| `lim` | empty chute, `l_mean - K*std`, learned and held | the pod |
+| `lim_t` = `lim * TIGHT_FRAC` | the body limit | the flesh only |
+| `lim2` = `chute_L - CHUTE_MARGIN` | **the chute** | anything at all, incl. a pale stalk |
+
+⚠️ `lim2` used to be `lim + STALK_L_EXTRA`, derived from the body limit. That is
+the wrong anchor: how dark the flesh is tells you nothing about how pale a stalk
+may be. On the machine it worked out to 69 against a stalk at L 70-75 — the
+threshold meant to find the stalk was **brighter than the stalk**, so the cue
+read `+0` and the bar chart showed nothing along a plainly visible stalk.
+
+`chute_L` is a **high percentile** (`CHUTE_PCTL`) of L over the channel, not a
+mean. The mean is dragged down by anything dark inside the ROI: with rails
+present it read 69 on a chute that is really 86, which put the limit back below
+the stalk. A percentile ignores those minorities and reports the metal itself.
 
 ### Three extents, and which is for what (v22)
 Getting these mixed up caused real bugs, twice:
