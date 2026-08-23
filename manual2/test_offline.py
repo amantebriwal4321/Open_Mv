@@ -101,7 +101,12 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
     if farjunk:
         for y in range(CH_Y, CH_Y + farjunk):
             for x in range(CH_X, CH_X + CH_W):
-                Limg[y][x], Aimg[y][x] = 28.0, 12.0
+                # Mid-grey, like the background above the chute: it passes the
+                # LOOSE limit but is nowhere near dark enough to be flesh. That
+                # is what the machine showed - any 0.33-0.49 with flesh 0.00 -
+                # and it is what made the junk look like a stalk rather than
+                # like a chilli.
+                Limg[y][x], Aimg[y][x] = 65.0, 4.0
 
     if speck:
         # Sensor noise is DIFFERENT every frame. That matters: the reference is
@@ -200,9 +205,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v25.py")).read()
+src = open(os.path.join(here, "open_mv_v26.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v25.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v26.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -311,6 +316,19 @@ CASES = [
     # reference removes it - no flag, and the answer stays right
     ("static junk, referenced",  dict(stem_first=True,  gap=2, body_len=76),
                                                                        "STEM"),
+    # v26: the exact frame from the machine. Grey background above the chute
+    # fills the far bands (any 0.33-0.49, no flesh) and used to be read as a
+    # five-band stalk, overriding a CORRECT taper of +0.45 at weight 2.4.
+    # The flesh cues are unharmed - the junk never passes the flesh limit - so
+    # the right answer is STEM, from taper.
+    # body_len is chosen so the flesh ends just short of the junk, leaving a
+    # 5-6 band gap. That matters: with a longer gap the run exceeds
+    # MAX_STALK_BANDS and is rejected by accident, which is why an earlier
+    # version of this case passed on the broken code. On the machine it was 5.
+    ("far junk beats taper",     dict(stem_first=True,  gap=2, body_len=100,
+                                      farjunk=34),                      "STEM"),
+    ("far junk, apex first",     dict(stem_first=False, gap=2, body_len=100,
+                                      farjunk=34),                      "APEX"),
 ]
 
 # Held-pod check: a pod that sits at the stopper must still read the same after

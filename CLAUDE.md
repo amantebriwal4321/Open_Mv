@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v25.py         <- highest number = current
+  open_mv_v26.py         <- highest number = current
+  open_mv_v25.py
   open_mv_v24.py
   open_mv_v23.py
   open_mv_v22.py
@@ -80,7 +81,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v25.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v26.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -138,6 +139,23 @@ flesh **are** the stalk.
 - The stalk cue is now **two-sided** (it can vote either way), so it leads the
   vote. The v18 rule that it must stay below taper applied only while it was
   one-sided.
+
+### A stalk has to END (v26)
+The stalk is a *contiguous* run outward from the flesh, and **a far-end run that
+reaches the edge of the channel is not a stalk** - a stalk stops, background does
+not. The near end keeps the opposite rule: a stalk there *should* reach the edge,
+because the pod is resting against the stopper. Nothing bounds the far side, so
+nothing there may be assumed to terminate.
+
+This is what the grey area above the chute was being read as: five bands at
+`any` 0.33-0.49 with no flesh in them, outvoting a **correct** taper of +0.45 at
+weight 2.4. Note the shape of the bug - v25 already *knew*, and printed
+`POD RUNS OFF FAR END`, then used the measurement anyway. A warning is not a
+guard.
+
+Also note which cues survived: the flesh cues were unharmed, because mid-grey
+junk never passes the flesh limit. Only the loose-profile cue was poisoned. When
+one cue disagrees with the rest, ask which profile it reads before believing it.
 
 ### Both ends of the ROI need scrutiny, not just the stopper end (v25)
 The stopper end has been checked since v18 ("has it reached the stopper?"). The
