@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v24.py         <- highest number = current
+  open_mv_v25.py         <- highest number = current
+  open_mv_v24.py
   open_mv_v23.py
   open_mv_v22.py
   open_mv_v21.py
@@ -79,7 +80,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v24.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v25.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -137,6 +138,19 @@ flesh **are** the stalk.
 - The stalk cue is now **two-sided** (it can vote either way), so it leads the
   vote. The v18 rule that it must stay below taper applied only while it was
   one-sided.
+
+### Both ends of the ROI need scrutiny, not just the stopper end (v25)
+The stopper end has been checked since v18 ("has it reached the stopper?"). The
+far end was not, and it needs the same treatment: **a real chilli ends before the
+box does.** If the pod reaches the last band, either `CHANNEL_ROI` is longer than
+the chute and its far end is sitting on something dark, or the pod is longer than
+the box. Either way the far third is not chilli, and taper - which compares the
+near third against the far third - is reading a fiction. On the machine that came
+out as `score -0.09, taper -0.07`: a weak, APEX-leaning non-answer. It is now
+flagged as `POD RUNS OFF FAR END` on screen and explained once in the log.
+
+Note the asymmetry is deliberate: the pod SHOULD touch the near (stopper) edge,
+and must not touch the far one.
 
 ### The reference learns ONLY from an empty chute, and drifts by the clock (v24)
 Two rules, both learned the hard way:
@@ -353,6 +367,16 @@ These caused a string of early crashes. Helpers exist — use them:
 - **Do not tune thresholds from screenshots.** This wasted a lot of time: each set of numbers
   fixed one bench scene (keyboard, wood, paper, phone screen) and broke on the next. Tune once
   on the **real machine** with its fixed lighting.
+- **Every decision line carries the version** (`>>> v25 #3 ...`) and so does the
+  profile dump. Two rounds were spent discussing output from a version that was
+  not the one running; a log line that does not say what produced it cannot be
+  trusted. Check it before diagnosing anything.
+- **A regression test proves nothing until it fails on the bug.** The 60 s dwell
+  test passed on the broken code at 322 frames and only bit at 12,900. Run a new
+  test against the previous version before believing it.
+- **Verify that a scripted edit actually matched.** A `str.replace` that finds
+  nothing changes nothing and reports success; one such silent no-op made a test
+  look like a detector failure. Assert the target text exists.
 - **Run `python manual2/test_offline.py`** after touching any threshold or weight. It
   exercises the detector on synthetic chillies with the camera stubbed out and catches an
   inverted or dead cue in a second.

@@ -56,7 +56,7 @@ STOP_Y = CH_Y + CH_H - 2          # the chilli rests here (bottom = stopper)
 
 def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
           off=0, noise=0.0, rails=0, bar=0, stalk_L=None,
-          flip_taper=False, speck=0):
+          flip_taper=False, speck=0, farjunk=0):
     """Return (L, A) images.
 
     stem_first  fat shoulder at the stopper end, point away from it
@@ -75,6 +75,9 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
                 the stem end. Physically odd for a perfect pod, but it is what
                 the machine reported (taper -0.25 with the stalk at the
                 stopper), and it is the case where only the stalk is right.
+    farjunk     px of something dark sitting at the FAR end of the ROI, i.e.
+                CHANNEL_ROI longer than the chute. The pod then appears to run
+                off the end of the box and the far third is not chilli at all.
     speck       px per band of faint sensor noise at the FAR end of the chute.
                 On an overexposed chute this is what v23 counted as a five-band
                 stalk (0.04-0.11 per band) and voted APEX with.
@@ -94,6 +97,11 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
         for y in range(CH_Y, CH_Y + CH_H):
             for x in list(range(CH_X, CH_X + rails)) +                      list(range(CH_X + CH_W - rails, CH_X + CH_W)):
                 Limg[y][x] = L_BODY + 6.0
+
+    if farjunk:
+        for y in range(CH_Y, CH_Y + farjunk):
+            for x in range(CH_X, CH_X + CH_W):
+                Limg[y][x], Aimg[y][x] = 28.0, 12.0
 
     if speck:
         # Sensor noise is DIFFERENT every frame. That matters: the reference is
@@ -192,9 +200,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v24.py")).read()
+src = open(os.path.join(here, "open_mv_v25.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v24.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v25.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -294,6 +302,15 @@ CASES = [
                                       speck=2),                          "STEM"),
     ("speck + real stalk",       dict(stem_first=True,  gap=20, body_len=76,
                                       stalk_L=74, speck=2),              "STEM"),
+    # v25: CHANNEL_ROI longer than the chute, so its far end sits on something
+    # dark. The pod then "ends" at the last band and the far third is not
+    # chilli. It must be flagged rather than quietly folded into taper.
+    ("junk at the far end",      dict(stem_first=True,  gap=2, body_len=76,
+                                      farjunk=30),                   "runs_off"),
+    # the same junk present from the start IS just background, and the
+    # reference removes it - no flag, and the answer stays right
+    ("static junk, referenced",  dict(stem_first=True,  gap=2, body_len=76),
+                                                                       "STEM"),
 ]
 
 # Held-pod check: a pod that sits at the stopper must still read the same after
@@ -316,6 +333,10 @@ def run(kw):
     empty_kw = dict(kw)
     empty_kw["body_len"] = 0
     empty_kw["stalk"] = 0
+    # farjunk models something arriving in the far end of the ROI AFTER the
+    # reference is learned. Junk present during warm-up is correctly referenced
+    # away and needs no flag; junk that turns up later does.
+    empty_kw["farjunk"] = 0
     empty = FakeImg(*build(**empty_kw))
     for _ in range(mod["REF_WARMUP"] + 2):
         look(empty)
@@ -332,6 +353,9 @@ for name, kw, want in CASES:
         # must NOT answer confidently when the two ends really are alike
         ok = (r["reason"] != "ok") or abs(r["score"]) < 0.30
         shown = "%s(weak)" % got if r["reason"] == "ok" else r["reason"]
+    elif want == "runs_off":
+        ok = bool(r["runs_off"])
+        shown = "runs_off" if r["runs_off"] else "MISSED"
     else:
         ok = r["reason"] == want
         shown = r["reason"]
