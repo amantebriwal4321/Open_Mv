@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v23.py         <- highest number = current
+  open_mv_v24.py         <- highest number = current
+  open_mv_v23.py
   open_mv_v22.py
   open_mv_v21.py
   open_mv_v20.py
@@ -78,7 +79,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v23.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v24.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -137,6 +138,25 @@ flesh **are** the stalk.
   vote. The v18 rule that it must stay below taper applied only while it was
   one-sided.
 
+### The reference learns ONLY from an empty chute, and drifts by the clock (v24)
+Two rules, both learned the hard way:
+
+⚠️ **Never update the reference while a pod is in view.** It means "what the
+chute looks like when empty". Updating every frame made it slowly absorb the
+pod, worst in the bands where pods habitually rest - the stopper end. The flesh
+there read thin, taper went negative, and the answer decayed to APEX on pod
+after pod. `REF_STALE_MS` is a watchdog so a bad reference can still recover.
+
+⚠️ **Pace anything time-based by the clock, never per frame.** This camera runs
+between 18 and 215 fps depending on what is in view, so a per-frame constant
+silently changes behaviour with the scene. The old per-frame leak climbed 0.1
+every nine seconds at 215 fps.
+
+The dwell test in `test_offline.py` holds a pod for a full 60 s at 215 fps. The
+old code loses the pod **entirely** (`bands -1--1`); this is the test that
+catches any return of this class of bug, and it is why the offline stub has a
+clock that advances and caches histograms.
+
 ### Thresholds come from the CHUTE, not from each other (v23)
 There are three limits, and it matters where each one is anchored:
 
@@ -156,6 +176,13 @@ read `+0` and the bar chart showed nothing along a plainly visible stalk.
 mean. The mean is dragged down by anything dark inside the ROI: with rails
 present it read 69 on a chute that is really 86, which put the limit back below
 the stalk. A percentile ignores those minorities and reports the metal itself.
+
+### A cue must clear the noise floor (v24)
+`STALK_MIN_W` requires the stalk bands to average a real width before the cue
+counts. Without it, five bands averaging 0.07 of a band - one or two pixels out
+of 28, i.e. sensor noise - were counted as a stalk and swung the answer at
+weight 2.4. A genuine 3 px stalk is 0.107. Any cue carrying this much weight
+needs a floor like this.
 
 ### Three extents, and which is for what (v22)
 Getting these mixed up caused real bugs, twice:

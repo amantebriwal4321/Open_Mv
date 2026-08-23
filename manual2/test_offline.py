@@ -34,7 +34,11 @@ class _Clock:
     def tick(self): pass
     def fps(self): return 30.0
 _time.clock = lambda: _Clock()
-_time.ticks_ms = lambda: 0
+_clock_ms = [0]
+def _advance(ms=5):
+    _clock_ms[0] += ms
+_time.ticks_ms = lambda: _clock_ms[0]
+_time.advance = _advance
 _time.ticks_diff = lambda a, b: a - b
 _time.ticks_add = lambda a, b: a + b
 sys.modules["time"] = _time
@@ -45,13 +49,14 @@ L_METAL, L_BODY, L_STALK = 86.0, 20.0, 55.0
 A_METAL, A_BODY, A_STALK = 0.0, 25.0, 10.0
 
 CH_X, CH_Y, CH_W, CH_H = 200, 50, 28, 138
+_speck_seq = 0
 CX = CH_X + CH_W // 2
 STOP_Y = CH_Y + CH_H - 2          # the chilli rests here (bottom = stopper)
 
 
 def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
           off=0, noise=0.0, rails=0, bar=0, stalk_L=None,
-          flip_taper=False):
+          flip_taper=False, speck=0):
     """Return (L, A) images.
 
     stem_first  fat shoulder at the stopper end, point away from it
@@ -70,6 +75,9 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
                 the stem end. Physically odd for a perfect pod, but it is what
                 the machine reported (taper -0.25 with the stalk at the
                 stopper), and it is the case where only the stalk is right.
+    speck       px per band of faint sensor noise at the FAR end of the chute.
+                On an overexposed chute this is what v23 counted as a five-band
+                stalk (0.04-0.11 per band) and voted APEX with.
     bar         px of dark STOPPER BAR inside the bottom edge of the ROI - i.e.
                 CHANNEL_ROI reaching a little past the stopper. Only darkens
                 the last band or two, so a single floor cannot remove it.
@@ -86,6 +94,18 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
         for y in range(CH_Y, CH_Y + CH_H):
             for x in list(range(CH_X, CH_X + rails)) +                      list(range(CH_X + CH_W - rails, CH_X + CH_W)):
                 Limg[y][x] = L_BODY + 6.0
+
+    if speck:
+        # Sensor noise is DIFFERENT every frame. That matters: the reference is
+        # a running minimum, so noise that repeats identically gets learned and
+        # cancelled, while real per-frame noise leaves a residual. Modelling it
+        # with a fixed seed made the test toothless - v23 passed it.
+        global _speck_seq
+        _speck_seq += 1
+        rs = random.Random(_speck_seq)
+        for y in range(CH_Y, CH_Y + (CH_H * 5) // 24):
+            for _ in range(speck):
+                Limg[y][CH_X + rs.randrange(CH_W)] = L_METAL - 20.0
 
     if bar:
         for y in range(CH_Y + CH_H - bar, CH_Y + CH_H):
@@ -126,7 +146,9 @@ class Stats:
         self.l_mean, self.l_stdev, self.a_mean = l_mean, l_stdev, a_mean
 
 class FakeImg:
-    def __init__(self, Limg, Aimg): self.L, self.A = Limg, Aimg
+    def __init__(self, Limg, Aimg):
+        self.L, self.A = Limg, Aimg
+        self._hcache = {}      # the scene is static per frame, so cache by roi
 
     def _px(self, roi):
         x, y, w, h = roi
@@ -135,14 +157,21 @@ class FakeImg:
                 for i in range(x, min(W, x + w))]
 
     def get_histogram(self, roi=None, **k):
+        hit = self._hcache.get(roi)
+        if hit is not None:
+            return hit
         px = self._px(roi)
         n = len(px)
         bins = [0.0] * 100
         if not n:
-            return Hist(bins)
+            h = Hist(bins)
+            self._hcache[roi] = h
+            return h
         for l, _ in px:
             bins[min(99, max(0, int(l)))] += 1.0 / n
-        return Hist(bins)
+        h = Hist(bins)
+        self._hcache[roi] = h
+        return h
 
     def get_statistics(self, roi=None, thresholds=None, **k):
         px = self._px(roi)
@@ -163,9 +192,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v23.py")).read()
+src = open(os.path.join(here, "open_mv_v24.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v23.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v24.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -258,6 +287,25 @@ CASES = [
                                       stalk_L=74, flip_taper=True),      "STEM"),
     ("very pale, apex first",    dict(stem_first=False, gap=2,  body_len=76,
                                       stalk_L=74),                       "APEX"),
+    # v24: faint noise on the chute at the FAR end. v23 counted five such bands
+    # as a stalk and voted APEX at weight 2.4 on a stem-first pod. The stalk cue
+    # must ignore it - the real answer here is STEM, from taper.
+    ("noise speck at far end",   dict(stem_first=True,  gap=2, body_len=76,
+                                      speck=2),                          "STEM"),
+    ("speck + real stalk",       dict(stem_first=True,  gap=20, body_len=76,
+                                      stalk_L=74, speck=2),              "STEM"),
+]
+
+# Held-pod check: a pod that sits at the stopper must still read the same after
+# a long dwell. The reference used to keep learning while the pod was in front
+# of it and slowly absorbed it - worst at the stopper end, where pods rest - so
+# the flesh there read thin, taper went negative, and the answer decayed to
+# APEX. At 215 fps that took seconds.
+HOLD_CASES = [
+    ("held 60 s, stem first",  dict(stem_first=True,  gap=2, body_len=76,
+                                    stalk_L=74),  "STEM"),
+    ("held 60 s, apex first",  dict(stem_first=False, gap=2, body_len=76,
+                                    stalk_L=74),  "APEX"),
 ]
 
 reset_reference = mod["reset_reference"]
@@ -293,6 +341,27 @@ for name, kw, want in CASES:
           "cent %+.2f  red %+.2f | bands %2d-%2d %s"
           % (name, shown, r["score"], r["s_taper"], r["s_stalk"],
              r["stalk_near"], r["stalk_far"], r["s_centroid"], r["s_red"],
+             r["lo"], r["hi"], "PASS" if ok else "  <<< FAIL"))
+
+for name, kw, want in HOLD_CASES:
+    mod["reset_reference"]()
+    ek = dict(kw); ek["body_len"] = 0; ek["stalk"] = 0
+    empty = FakeImg(*build(**ek))
+    for _ in range(mod["REF_WARMUP"] + 2):
+        _time.advance(5)
+        look(empty)
+    held = FakeImg(*build(**kw))
+    r = None
+    for _ in range(60 * 215):             # a full 60 s dwell at 215 fps
+        _time.advance(1000 // 215)
+        r = look(held)
+    got = "STEM" if r["score"] > 0 else "APEX"
+    ok = r["reason"] == "ok" and got == want and abs(r["score"]) >= 0.12
+    fails += 0 if ok else 1
+    print("%-24s -> %-11s %+.2f | taper %+.2f  stalk %+.0f (%d/%d)  "
+          "cent %+.2f | bands %2d-%2d %s"
+          % (name, got, r["score"], r["s_taper"], r["s_stalk"],
+             r["stalk_near"], r["stalk_far"], r["s_centroid"],
              r["lo"], r["hi"], "PASS" if ok else "  <<< FAIL"))
 
 # empty chute must read empty
