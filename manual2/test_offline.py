@@ -89,6 +89,17 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
                 CHANNEL_ROI reaching a little past the stopper. Only darkens
                 the last band or two, so a single floor cannot remove it.
     """
+    body_len = int(round(body_len * SY))
+    gap = int(round(gap * SY))
+    stalk = int(round(stalk * SY))
+    farjunk = int(round(farjunk * SY))
+    farpatch = int(round(farpatch * SY))
+    bar = int(round(bar * SY))
+    fat = fat * SX
+    thin = thin * SX
+    rails = int(round(rails * SX))
+    off = int(round(off * SX))
+
     Limg = [[L_METAL] * W for _ in range(H)]
     Aimg = [[A_METAL] * W for _ in range(H)]
     if noise:
@@ -216,9 +227,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v32.py")).read()
+src = open(os.path.join(here, "open_mv_v33.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v32.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v33.py", "exec"), mod)
 look = mod["look"]
 
 # INVERT_ANSWER is a DEPLOYMENT setting - it flips the finished answer to match
@@ -233,6 +244,16 @@ mod["INVERT_ANSWER"] = False
 CH_X, CH_Y, CH_W, CH_H = mod["CHANNEL_ROI"]
 CX = CH_X + CH_W // 2
 STOP_Y = CH_Y + CH_H - 2
+
+# Every length in the cases below is written in pixels, for the ROI these tests
+# were first written against (28 x 138). What actually matters to the detector
+# is how many BANDS a thing spans, so those pixel figures have to scale with the
+# ROI or the cases stop describing what they were written to describe: moving to
+# a 32 x 214 ROI made bands 8.9 px instead of 5.75, so a 14 px stalk fell from
+# 2.4 bands to 1.6 and stopped registering at all. Four cases "failed" without
+# anything being wrong with the detector.
+SY = CH_H / 138.0        # lengthways
+SX = CH_W / 28.0         # across
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
 CASES = [
