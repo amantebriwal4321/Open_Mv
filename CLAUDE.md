@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v26.py         <- highest number = current
+  open_mv_v27.py         <- highest number = current
+  open_mv_v26.py
   open_mv_v25.py
   open_mv_v24.py
   open_mv_v23.py
@@ -81,7 +82,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v26.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v27.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes
@@ -139,6 +140,20 @@ flesh **are** the stalk.
 - The stalk cue is now **two-sided** (it can vote either way), so it leads the
   vote. The v18 rule that it must stay below taper applied only while it was
   one-sided.
+
+### A chilli is one connected object (v27)
+The flesh extent is the **contiguous run nearest the stopper** that is long
+enough to be a pod, not first-to-last matching band. A detached patch beyond
+the pod - dark background at the top of the ROI, another chilli queued up - is
+something else in frame and does not belong in the measurement. Same reasoning
+as the stalk rule below: a thing that does not connect to the pod is not part
+of the pod, applied to the flesh instead of the stalk.
+
+Note the failure mode this catches is subtle: taper does not flip, it dilutes.
+On the machine it read `APEX -0.11, taper -0.08` - the pod was called APEX by a
+whisker, so it looked like an accuracy problem rather than a measurement bug. A
+weak wrong answer is still a wrong answer, and often points at exactly this
+kind of contamination.
 
 ### A stalk has to END (v26)
 The stalk is a *contiguous* run outward from the flesh, and **a far-end run that

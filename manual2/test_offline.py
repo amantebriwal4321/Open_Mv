@@ -56,7 +56,7 @@ STOP_Y = CH_Y + CH_H - 2          # the chilli rests here (bottom = stopper)
 
 def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
           off=0, noise=0.0, rails=0, bar=0, stalk_L=None,
-          flip_taper=False, speck=0, farjunk=0):
+          flip_taper=False, speck=0, farjunk=0, farpatch=0):
     """Return (L, A) images.
 
     stem_first  fat shoulder at the stopper end, point away from it
@@ -75,6 +75,10 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
                 the stem end. Physically odd for a perfect pod, but it is what
                 the machine reported (taper -0.25 with the stalk at the
                 stopper), and it is the case where only the stalk is right.
+    farpatch    px of DARK background at the very far end, separated from the
+                pod by a gap. Dark enough to pass the flesh limit, so it would
+                pull the flesh extent to the end of the box and pollute taper's
+                far third. Exactly the frame from the machine.
     farjunk     px of something dark sitting at the FAR end of the ROI, i.e.
                 CHANNEL_ROI longer than the chute. The pod then appears to run
                 off the end of the box and the far third is not chilli at all.
@@ -97,6 +101,13 @@ def build(stem_first, body_len=86, gap=2, stalk=14, fat=11.0, thin=1.0,
         for y in range(CH_Y, CH_Y + CH_H):
             for x in list(range(CH_X, CH_X + rails)) +                      list(range(CH_X + CH_W - rails, CH_X + CH_W)):
                 Limg[y][x] = L_BODY + 6.0
+
+    if farpatch:
+        for y in range(CH_Y, CH_Y + farpatch):
+            for x in range(CH_X, CH_X + CH_W):
+                # Dark like flesh - it will pass the flesh limit, not just the
+                # loose one. That is the case v27 must handle.
+                Limg[y][x], Aimg[y][x] = 24.0, 22.0
 
     if farjunk:
         for y in range(CH_Y, CH_Y + farjunk):
@@ -205,9 +216,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v26.py")).read()
+src = open(os.path.join(here, "open_mv_v27.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v26.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v27.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -329,6 +340,15 @@ CASES = [
                                       farjunk=34),                      "STEM"),
     ("far junk, apex first",     dict(stem_first=False, gap=2, body_len=100,
                                       farjunk=34),                      "APEX"),
+    # v27: a detached patch of dark background beyond the pod, with a gap in
+    # between. Dark enough to pass the flesh limit, so first-to-last matching
+    # band pulled the flesh extent to the end of the box and taper averaged the
+    # patch with real chilli. The connected-run rule ignores it.
+    # A gap-and-patch big enough that first-to-last extent lets the far patch
+    # drag taper the wrong way. Twelve px was diluted rather than flipped, which
+    # was a passing test that hid the bug on v26.
+    ("detached far patch",       dict(stem_first=True,  gap=2, body_len=60,
+                                      farpatch=28),                     "STEM"),
 ]
 
 # Held-pod check: a pod that sits at the stopper must still read the same after
@@ -355,6 +375,7 @@ def run(kw):
     # reference is learned. Junk present during warm-up is correctly referenced
     # away and needs no flag; junk that turns up later does.
     empty_kw["farjunk"] = 0
+    empty_kw["farpatch"] = 0
     empty = FakeImg(*build(**empty_kw))
     for _ in range(mod["REF_WARMUP"] + 2):
         look(empty)
