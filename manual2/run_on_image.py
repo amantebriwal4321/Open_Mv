@@ -102,14 +102,65 @@ def load_detector():
     return mod, ver, clock_ms
 
 
+def crop_frame_buffer(im):
+    """Pull the camera frame out of a screenshot of the whole IDE window.
+
+    Saving the frame buffer properly gives a 320x240 file, but a screen capture
+    of the IDE is what usually arrives. The frame-buffer panel is surrounded by
+    the IDE's flat dark padding, so the picture is the block of NON-flat pixels
+    in the right-hand half. Scaling it back down loses a little sharpness but
+    keeps every threshold in this code meaningful, which a raw screenshot does
+    not - the bands would be measured over the wrong pixels entirely.
+    """
+    W, H = im.size
+    px = im.load()
+
+    def flat(c):
+        return abs(c[0] - c[1]) < 6 and abs(c[1] - c[2]) < 6 and c[0] < 80
+
+    x_start = int(W * 0.5)
+    # vertical extent: scan a column near the middle of the right panel
+    xs = x_start + (W - x_start) // 2
+    ys = [y for y in range(H) if not flat(px[xs, y])]
+    if not ys:
+        return None
+    top, bot = min(ys), max(ys)
+    # horizontal extent: scan a row inside that band
+    ym = (top + bot) // 2
+    xsr = [x for x in range(x_start, W) if not flat(px[x, ym])]
+    if not xsr:
+        return None
+    left, right = min(xsr), max(xsr)
+    w = right - left
+    h = bot - top
+    if w < 100 or h < 80:
+        return None
+    # The panel is 4:3, and the WIDTH is the measurement to trust. The vertical
+    # scan reaches past the picture into the toolbar and status bar, which are
+    # not flat padding either - on one screenshot that gave a 929x852 box for a
+    # frame that is really 929x697, and every band was then measured over the
+    # wrong pixels. Derive the height from the width instead.
+    h2 = int(round(w * 240.0 / 320.0))
+    if abs(h2 - h) > 0.15 * h:
+        h = h2
+    return (left, top, min(W, left + w), min(H, top + h))
+
+
 class Frame:
     """A saved picture, presented the way the OpenMV image API presents one."""
 
     def __init__(self, path):
         im = Image.open(path).convert("RGB")
         if im.size != (320, 240):
-            print("  note: %s is %dx%d, resizing to 320x240 to match the camera"
-                  % (os.path.basename(path), im.size[0], im.size[1]))
+            box = crop_frame_buffer(im) if im.size[0] > 700 else None
+            if box:
+                print("  %s is a %dx%d screenshot - cropping the frame buffer "
+                      "at %s" % (os.path.basename(path), im.size[0], im.size[1],
+                                 box))
+                im = im.crop(box)
+            else:
+                print("  note: %s is %dx%d, resizing to 320x240"
+                      % (os.path.basename(path), im.size[0], im.size[1]))
             im = im.resize((320, 240))
         lab = im.convert("LAB")
         px = lab.load()

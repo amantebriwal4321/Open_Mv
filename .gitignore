@@ -33,3 +33,8 @@ _pptx/
 
 # OpenMV IDE autosave scratch files
 *.autosave
+
+# frames saved from the IDE for offline analysis - working data, not source
+empty*.png
+chili*.png
+*_320.png
