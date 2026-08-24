@@ -379,7 +379,7 @@ BAND_ON       = 0.06
 BAND_THIN     = 0.05     # something is here, at the loose brightness limit
 # ---- the empty-channel reference (background) ----
 # Learned per band as a running minimum: every band is empty sometimes, so the
-# smallest value a band has shown recently IS that band's empty reading. See
+# smallest value a band has recently shown is its empty reading. See
 # update_reference() for why one number was not enough.
 # Per SECOND, not per frame. Frame rate here swings between 18 and 215 fps with
 # what is in view, so anything paced per frame changes behaviour with the scene:

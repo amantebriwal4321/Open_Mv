@@ -1,6 +1,6 @@
 # open_mv2.py  —  OpenMV Cam H7 Plus
 # ==================================================================================
-#  VERSION 33     (bumped every time the code changes - check this first)
+#  VERSION 34     (bumped every time the code changes - check this first)
 # ----------------------------------------------------------------------------------
 #  v28  UI: PIN THE MARKER TO THE STOPPER. Same answer, better shown.
 #
@@ -296,7 +296,7 @@ from pyb import Pin, LED
 
 # One place only. The banner prints this, so the terminal can never disagree
 # with the header again (in v19 it did, and cost a debugging round).
-VERSION = 33
+VERSION = 34
 
 
 # ------------------------------- CONFIG -------------------------------
@@ -379,7 +379,7 @@ BAND_ON       = 0.06
 BAND_THIN     = 0.05     # something is here, at the loose brightness limit
 # ---- the empty-channel reference (background) ----
 # Learned per band as a running minimum: every band is empty sometimes, so the
-# smallest value a band has recently shown is its empty reading. See
+# smallest value a band has shown recently IS that band's empty reading. See
 # update_reference() for why one number was not enough.
 # Per SECOND, not per frame. Frame rate here swings between 18 and 215 fps with
 # what is in view, so anything paced per frame changes behaviour with the scene:
@@ -1093,67 +1093,89 @@ def longest_run(flags):
     return best_s, best_n
 
 def suggest_channel_roi(img):
-    """Measure where the bright chute is, with the chute EMPTY, and print the
-    CHANNEL_ROI that fits it.
+    """Measure where the chute is, with it EMPTY, and print the CHANNEL_ROI.
 
     Reading these coordinates off a screenshot is guesswork - the frame buffer
-    is drawn scaled inside a window, so every number has to be converted back,
-    and it has been wrong more than once. The camera can measure its own chute
-    exactly, so let it.
+    is drawn scaled inside a window, so every number has to be converted back -
+    and it has been wrong more than once. The camera can measure its own chute,
+    so let it.
+
+    The test is not "is this row bright". Plenty of things are bright: a hand,
+    a cable, a lit patch of bench. The chute is a bright strip AT THE SAME PLACE
+    AND THE SAME WIDTH all the way down, so each row has to agree with the strip
+    found in the middle of the chute. A first version only asked for brightness
+    and ran the box up over the operator's hand, which then read as a full pod.
     """
     print("")
     print("-" * 62)
-    print("FIT_ROI: measuring the chute. The chute must be EMPTY for this.")
+    print("FIT_ROI: measuring the chute.")
+    print("  The chute must be EMPTY and nothing else in the picture.")
 
     STEP = 2
     INSET = 2
+    NX = 320 // STEP
 
-    # --- horizontal: the chute is the brightest vertical strip ---
-    cols = []
-    for x in range(0, 320 - STEP, STEP):
-        try:
-            st = img.get_statistics(roi=(x, 40, STEP, 160))
-            cols.append(_stat(st, "l_mean", 0.0))
-        except Exception:
-            cols.append(0.0)
-    peak = max(cols) if cols else 0.0
+    def bright_run(y, h, thresh):
+        """(start, length) of the widest bright run across the picture at y."""
+        vals = []
+        for i in range(NX):
+            try:
+                st = img.get_statistics(roi=(i * STEP, y, STEP, h))
+                vals.append(_stat(st, "l_mean", 0.0))
+            except Exception:
+                vals.append(0.0)
+            
+        return longest_run([v >= thresh for v in vals]), vals
+
+    # --- the chute, as seen across the middle of the picture ---
+    (mx, mn), vals = bright_run(90, 60, 0.0)
+    peak = max(vals) if vals else 0.0
     if peak <= 0:
-        print("  could not find anything bright. Is the chute lit?")
+        print("  nothing bright found. Is the chute lit?")
         print("-" * 62)
         return
-    xs, xn = longest_run([c >= peak * 0.80 for c in cols])
-    if xn < 2:
-        print("  no clear bright strip found.")
+    thresh = peak * 0.80
+    (mx, mn), _ = bright_run(90, 60, thresh)
+    if mn < 2:
+        print("  no clear bright strip across the middle of the picture.")
         print("-" * 62)
         return
-    x0, w = xs * STEP, xn * STEP
+    x0, w = mx * STEP, mn * STEP
+    cx = x0 + w // 2
 
-    # --- vertical: how far that strip stays bright ---
-    rows = []
+    # --- how far up and down does THAT SAME strip continue? ---
+    # A row counts only if its bright run overlaps the reference strip by most
+    # of its width. That is what a hand or a cable fails.
+    ok = []
     for y in range(0, 240 - STEP, STEP):
-        try:
-            st = img.get_statistics(roi=(x0, y, w, STEP))
-            rows.append(_stat(st, "l_mean", 0.0))
-        except Exception:
-            rows.append(0.0)
-    ys, yn = longest_run([r >= peak * 0.70 for r in rows])
+        (rx, rn), _ = bright_run(y, STEP, thresh)
+        if rn < 2:
+            ok.append(False)
+            continue
+        rx0, rw = rx * STEP, rn * STEP
+        lo = max(rx0, x0)
+        hi = min(rx0 + rw, x0 + w)
+        overlap = max(0, hi - lo)
+        # must cover most of the reference strip, and not be wildly wider
+        ok.append(overlap >= 0.7 * w and rw <= 2.0 * w)
+    ys, yn = longest_run(ok)
     if yn < 4:
-        print("  the bright strip is too short to be the chute.")
+        print("  the strip does not continue far enough to be the chute.")
         print("-" * 62)
         return
     y0, h = ys * STEP, yn * STEP
 
     fit = (x0 + INSET, y0 + INSET, max(4, w - 2 * INSET),
            max(8, h - 2 * INSET))
-    print("  chute found at x %d..%d, y %d..%d  (brightness %.0f)"
-          % (x0, x0 + w, y0, y0 + h, peak))
+    print("  chute: x %d..%d  y %d..%d   (brightness %.0f, centre x=%d)"
+          % (x0, x0 + w, y0, y0 + h, peak, cx))
     print("")
     print("  >>> CHANNEL_ROI   = %s" % (fit,))
     print("      currently      %s" % (CHANNEL_ROI,))
     print("")
-    print("  Copy that line into the CONFIG block, set FIT_ROI = False,")
-    print("  and restart. A chilli should then fill about two thirds of the")
-    print("  box, leaving clear chute at the far end.")
+    print("  Copy that into the CONFIG block, set FIT_ROI = False, restart.")
+    print("  Then check on screen: the magenta box must sit ON the chute and")
+    print("  nowhere else. A chilli should fill about two thirds of it.")
     print("-" * 62)
     print("")
 

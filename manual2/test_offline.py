@@ -227,9 +227,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v33.py")).read()
+src = open(os.path.join(here, "open_mv_v34.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v33.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v34.py", "exec"), mod)
 look = mod["look"]
 
 # INVERT_ANSWER is a DEPLOYMENT setting - it flips the finished answer to match
