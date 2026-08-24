@@ -216,10 +216,23 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v28.py")).read()
+src = open(os.path.join(here, "open_mv_v29.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v28.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v29.py", "exec"), mod)
 look = mod["look"]
+
+# INVERT_ANSWER is a DEPLOYMENT setting - it flips the finished answer to match
+# how the camera happens to be mounted. These tests check the MEASUREMENT, so
+# they always run with it off. Without this, turning the switch on in the
+# shipped file made all 50 cases fail, which says nothing about the detector.
+mod["INVERT_ANSWER"] = False
+
+# The synthetic scene must follow CHANNEL_ROI, not assume where it is. Moving
+# the ROI in the shipped file used to make all 50 cases fail with "bands -1--1"
+# - nothing detected - because the fake chilli was drawn outside the new box.
+CH_X, CH_Y, CH_W, CH_H = mod["CHANNEL_ROI"]
+CX = CH_X + CH_W // 2
+STOP_Y = CH_Y + CH_H - 2
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
 CASES = [
