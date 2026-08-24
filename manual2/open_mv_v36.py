@@ -1,26 +1,34 @@
 # open_mv2.py  —  OpenMV Cam H7 Plus
 # ==================================================================================
-#  VERSION 37     (bumped every time the code changes - check this first)
+#  VERSION 36     (bumped every time the code changes - check this first)
 # ----------------------------------------------------------------------------------
-#  v37  BIGGER DETECTION BOX & COLOR-SEPARATED STALK RECOGNITION.
+#  v36  CORRECTED CHUTE ROI: ELIMINATED DESK MAT BLEED AT TOP (y=22 -> y=48).
 #
-#  1. BIGGER DETECTION BOX:
-#     Expanded CHANNEL_ROI to (192, 30, 48, 182) so the entire chute width (48px)
-#     and full chute length (182px) are captured generously without clipping
-#     large or curved chillies.
-#  2. TRUE STALK VS APEX COLOR-LIGHTNESS SEPARATOR:
-#     - A dried stalk is PALE / WOODEN (L > 50, redness a_mean < 8.0).
-#     - A tapering apex tip is DEEP RED / DARK (L < 45, redness a_mean >= 10.0).
-#     This accurately recognizes the pale stalk when resting against the stopper
-#     without being confused by a thin red apex tip.
-#  3. BIG UI DISPLAY:
-#     Larger detection box rendering, thicker outlines, and high-visibility markers.
+#  ROOT CAUSE OF "DETECTING THEM ALL WRONG":
+#  In v33-v35, CHANNEL_ROI was set to (130, 22, 32, 214).
+#  The height of 214 reaching y=22 was OVEREXTENDING into the pitch-black floral
+#  desk mat above the chute!
+#  As shown in the terminal dump:
+#      23 | 0.95 0.94 0.34 | ############### <-- far end
+#  Band 23 was 95% full of dark desk mat! This made the top of the channel
+#  ALWAYS measure as 95% fat, pulling w_far up to 0.38-0.50 and forcing taper
+#  to say APEX (-0.24) even when a fat STEM was at the stopper!
+#
+#  Fixed in v36:
+#  1. Calibrated CHANNEL_ROI = (205, 48, 26, 145):
+#     - x=205, w=26: strictly inside the bright metal chute.
+#     - y=48,  h=145: starts at top of metal chute (y=48) and stops right at the
+#       metal stopper bar (y=193). ZERO desk mat bleed at top or bottom!
+#  2. Stalk-Shoulder Consistency Rule:
+#     A stalk is attached to the FAT calyx shoulder. A thin extension on the
+#     thin end is the tapering apex tip, not a stalk.
+#  3. W_TAPER = 2.0, W_CENTROID = 1.0, W_STALK = 0.8.
 # ==================================================================================
 
 import sensor, image, time, math
 from pyb import Pin, LED
 
-VERSION = 37
+VERSION = 36
 
 
 # ------------------------------- CONFIG -------------------------------
@@ -31,8 +39,9 @@ DEBUG         = True     # True = draw the channel, the bands and the ends
 FIT_ROI       = False    # True = auto-measure chute on startup
 DRAW_OVERLAY  = True     # False = clean frame
 
-# BIG GENEROUS DETECTION BOX (wide and full length):
-CHANNEL_ROI   = (192, 30, 48, 182)
+# The metal chute, calibrated strictly ON THE METAL:
+# (x=205, y=48, w=26, h=145) -> stops at stopper bar (y=193), starts at chute top (y=48).
+CHANNEL_ROI   = (205, 48, 26, 145)
 #                x    y   w    h
 
 # Which edge of that box the stopper is on: "bottom" "top" "left" "right".
@@ -45,40 +54,39 @@ INVERT_ANSWER = False
 MANUAL_L      = None     # None = AUTO (measured each frame); int = fixed, for production
 DARK_K        = 0.50
 DARK_L_MIN    = 8
-DARK_L_MAX    = 52
+DARK_L_MAX    = 50
 
 TIGHT_FRAC    = 0.70
 TIGHT_MIN     = 12
 STALK_SPAN    = 0.72
 STALK_L_CAP   = 90
-STALK_MIN_W   = 0.08
+STALK_MIN_W   = 0.09
 
-# Redness presence test
-MIN_CHILI_RED = 4.5
-STALK_MAX_RED = 8.5      # Stalks are pale (a < 8.5); red flesh has a > 10.0
+# Redness presence test only
+MIN_CHILI_RED = 5.0
 
 # ---- the width profile ----
 BANDS         = 24       # slices along the channel
-BAND_ON       = 0.05
-BAND_THIN     = 0.04     # something is here, at the loose brightness limit
+BAND_ON       = 0.06
+BAND_THIN     = 0.05     # something is here, at the loose brightness limit
 
 # ---- the empty-channel reference (background) ----
 REF_LEAK_PER_S = 0.004
 REF_STALE_MS   = 60000   # refresh if stuck for 60s
 REF_WARMUP    = 40       # frames before reference is trusted
-FLOOR_WARN    = 0.20
+FLOOR_WARN    = 0.15
 MIN_BODY_BANDS = 3       # shorter than this is noise
 MIN_STALK_BANDS = 2      # a 1-band overhang is just the tapering tip
-MAX_STALK_BANDS = 8      # max stalk length
+MAX_STALK_BANDS = 7      # longer than this is not a stalk
 
 # ---- must be at the stopper before we answer ----
-STOPPER_TOUCH_BANDS = 3  # body must reach within this many bands of the stopper end
+STOPPER_TOUCH_BANDS = 2  # body must reach within this many bands of the stopper end
 
 # ---- decision weights ----
-W_STALK       = 1.8      # Pale stalk presence (direct evidence)
-W_TAPER       = 1.4      # Body shape (fat shoulder vs thin tail)
-W_CENTROID    = 0.8      # Mass distribution
-W_RED         = 0.0      # Redness is presence/stalk discriminator
+W_TAPER       = 2.0      # The stem end is the fat end (primary ground truth)
+W_CENTROID    = 1.0      # Mass sits toward the fat end
+W_STALK       = 0.8      # Stalk confirmation cue
+W_RED         = 0.0      # Redness is presence only
 A_FULL        = 12.0
 
 # ---- rules ----
@@ -504,7 +512,7 @@ def look(img):
         s_centroid = 0.0
     out["s_centroid"] = s_centroid
 
-    # --- 6. STALK: check pale stalk vs red apex tip using redness and loose profile ---
+    # --- 6. STALK: contiguous stalk runs ---
     stalk_near, ran_off_near = stalk_run(loose, lo_f - 1, -1)
     stalk_far, ran_off_far = stalk_run(loose, hi_f + 1, +1)
 
@@ -523,19 +531,14 @@ def look(img):
     if stalk_far < MIN_STALK_BANDS or stalk_far > MAX_STALK_BANDS:
         stalk_far = 0
 
-    # True Stalk vs Apex Color Validation:
-    # A true stalk is pale (redness < STALK_MAX_RED). A red apex tip is rich in redness (redness >= STALK_MAX_RED).
-    if stalk_near > 0:
-        near_stalk_roi = span_rect(max(0, lo_f - stalk_near), lo_f)
-        r_near = region_redness_any(img, near_stalk_roi)
-        if r_near is not None and r_near > STALK_MAX_RED:
-            stalk_near = 0  # It's a red tapering tip, not a pale stalk!
-
-    if stalk_far > 0:
-        far_stalk_roi = span_rect(hi_f, min(BANDS - 1, hi_f + stalk_far))
-        r_far = region_redness_any(img, far_stalk_roi)
-        if r_far is not None and r_far > STALK_MAX_RED:
-            stalk_far = 0   # It's a red tapering tip, not a pale stalk!
+    # STALK-SHOULDER CONSISTENCY RULE:
+    # A stalk is ALWAYS attached to the fat calyx shoulder.
+    # If the near end is significantly thinner than the far end (s_taper < -0.12),
+    # any thin extension at the near end is the APEX TIP, NOT a stalk!
+    if s_taper < -0.12:
+        stalk_near = 0
+    if s_taper > +0.12:
+        stalk_far = 0
 
     out["stalk_near"], out["stalk_far"] = stalk_near, stalk_far
     if stalk_near == stalk_far:
@@ -554,7 +557,7 @@ def look(img):
         s_red, rw = 0.0, 0.0
     out["s_red"] = s_red
 
-    # --- 8. Combined Score ---
+    # --- 8. Combined Score (Geometry Dominates) ---
     tot_w = W_TAPER + W_CENTROID + rw
     acc = W_TAPER * s_taper + W_CENTROID * s_centroid + rw * s_red
     if s_stalk != 0.0:
@@ -790,10 +793,9 @@ def draw_scene(img, r, headline, color, sub, fps):
     if not DRAW_OVERLAY:
         return
     if DEBUG:
-        # Draw BIG detection box outline in magenta
-        draw_rect(img, CHANNEL_ROI, (255, 0, 255), 2)
+        draw_rect(img, CHANNEL_ROI, (255, 0, 255), 1)
         b = band_roi(0)
-        draw_rect(img, b, (0, 255, 255), 2, True)
+        draw_rect(img, b, (0, 255, 255), 1, True)
 
         if r["prof"]:
             for i in range(BANDS):
@@ -819,12 +821,12 @@ def draw_scene(img, r, headline, color, sub, fps):
         is_stem = r["score"] > 0
         mk = span_rect(0, 2)
         col = (0, 220, 0) if is_stem else (255, 60, 60)
-        draw_rect(img, mk, col, 3)
+        draw_rect(img, mk, col, 2)
         label = "STEM" if is_stem else "APEX"
         cx, cy, cw, ch = CHANNEL_ROI
-        lx = max(0, cx - 48) if cx > 48 else min(319, cx + cw + 4)
+        lx = max(0, cx - 44) if cx > 44 else min(319, cx + cw + 4)
         ly = mk[1] + max(0, (mk[3] - 7) // 2)
-        draw_str(img, lx, ly, label, color=col, scale=2)
+        draw_str(img, lx, ly, label, color=col, scale=1)
 
     bx, by, bw, bh = banner_rect()
     draw_rect(img, (bx, by, bw, bh), (0, 0, 0), 1, True)
