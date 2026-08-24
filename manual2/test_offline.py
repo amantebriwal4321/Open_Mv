@@ -227,9 +227,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v37.py")).read()
+src = open(os.path.join(here, "open_mv_v38.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v37.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v38.py", "exec"), mod)
 look = mod["look"]
 
 # INVERT_ANSWER is a DEPLOYMENT setting - it flips the finished answer to match
@@ -253,6 +253,16 @@ STOP_Y = CH_Y + CH_H - 2
 # 2.4 bands to 1.6 and stopped registering at all. Four cases "failed" without
 # anything being wrong with the detector.
 SY = CH_H / 138.0        # lengthways
+
+# A "short of the stopper" gap has to be expressed in BANDS, not pixels, or it
+# stops meaning that the moment STOPPER_TOUCH_BANDS or the ROI height changes.
+# Raising the tolerance from 2 bands to 3 turned a 20 px gap from "not arrived"
+# into "arrived", and the case failed while describing nothing real.
+def gap_bands(n):
+    """Pixels to write in a case so the pod ends up n bands short."""
+    return int(round(n * 138.0 / mod["BANDS"]))
+
+SHORT_GAP = gap_bands(mod["STOPPER_TOUCH_BANDS"] + 2)
 SX = CH_W / 28.0         # across
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
@@ -314,7 +324,8 @@ CASES = [
     # stalk is at the far end), so it genuinely has not arrived and must not be
     # judged. This is the pair that proves the stalk is being read as a stalk
     # and not just as "something near the stopper".
-    ("apex-first, same gap",     dict(stem_first=False, stalk_L=44, gap=20,
+    ("apex-first, same gap",     dict(stem_first=False, stalk_L=44,
+                                      gap=SHORT_GAP,
                                       body_len=76),                   "sliding"),
     # v22: a PALE stalk - too bright for the body limit, so it exists only in
     # the loose profile. This is the path that was still using a single-number
