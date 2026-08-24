@@ -1,6 +1,125 @@
 # open_mv2.py  —  OpenMV Cam H7 Plus
 # ==================================================================================
-#  VERSION 23     (bumped every time the code changes - check this first)
+#  VERSION 27     (bumped every time the code changes - check this first)
+# ----------------------------------------------------------------------------------
+#  v27  THE POD IS ONE CONNECTED THING - TAKE THE FLESH RUN AT THE STOPPER.
+#
+#  v26 gets the answer right, and the profile shows why it is still fragile:
+#
+#      19 | 0.90 0.29 0.21
+#      20 | 0.73 0.13 0.08
+#      21 | 0.54 0.01 0.00   << STALK
+#      22 | 0.37 0.12 0.07
+#      23 | 0.44 0.35 0.33   <-- far end [pod ends] [flesh ends]
+#
+#  The flesh ends at band 23. But band 21 has no flesh at all, so bands 22-23
+#  are a SEPARATE patch, not part of the chilli - it is the background above the
+#  chute, dark enough here to pass the flesh limit. The flesh extent was taken
+#  as first-to-last matching band, gaps and all, so that patch was pulled in and
+#  taper's far third averaged it with real chilli.
+#
+#  A chilli is one connected object, and it is the one at the stopper. The flesh
+#  extent is now the contiguous run NEAREST THE STOPPER that is long enough to
+#  be a pod. Detached patches beyond it are whatever else is in frame, and are
+#  ignored. This is the same reasoning as v26 - a thing that does not connect to
+#  the pod is not part of the pod - applied to the flesh instead of the stalk.
+# ----------------------------------------------------------------------------------
+#  v26  A STALK HAS TO END. IF IT REACHES THE EDGE OF THE VIEW IT IS NOT A STALK.
+#
+#  v25 flagged POD RUNS OFF FAR END correctly, and then went on to use the
+#  corrupted measurement anyway:
+#
+#      flesh near third 0.26  far third 0.10  taper +0.45 -> STEM at stopper
+#      stalk bands: 0 at the stopper end, 5 at the far end -> APEX at stopper
+#      >>> v25 #3  APEX FIRST   (score -0.42  taper +0.45  stalk -1)
+#
+#  Taper had it RIGHT. The five "stalk" bands at the far end were the grey
+#  background above the chute - `any` 0.33-0.49 with flesh 0.00 - and at weight
+#  2.4 they overrode a correct answer.
+#
+#  The flesh cues were unharmed, because the junk is mid-grey and never passes
+#  the flesh limit. Only the stalk cue, which reads the loose profile, was
+#  poisoned. So:
+#
+#  1. A stalk must END. It is measured as a contiguous run outward from the
+#     flesh, and if that run reaches the edge of the channel at the FAR end it
+#     is not a stalk - a stalk stops, background does not. The near end keeps
+#     the opposite rule: a stalk there SHOULD reach the edge, because the pod is
+#     resting against the stopper. Nothing bounds the far side, so nothing there
+#     may be assumed to terminate.
+#  2. Measuring the run properly also fixes a subtler fault: `hi - hi_f` counted
+#     every band between the flesh and the far end of the pod as stalk, gaps
+#     included. A stalk is attached to the pod, so only the contiguous part
+#     counts.
+# ----------------------------------------------------------------------------------
+#  v25  SAY WHEN THE POD RUNS OFF THE FAR END, AND STAMP THE VERSION ON EVERY LINE.
+#
+#  From the machine: `[pod ends] [flesh ends]` both on band 23, the very last
+#  band, with flesh 0.40-0.51 all the way up. A real chilli ends BEFORE the box
+#  does. When the object reaches the far edge, either CHANNEL_ROI is longer than
+#  the chute and its far end is sitting on something dark, or the pod is longer
+#  than the box. Either way the far third is measuring something that is not
+#  chilli, and taper - which compares the near third against the far third - is
+#  reading a fiction. It quietly said APEX.
+#
+#  1. The far end now gets the same scrutiny the stopper end has had since v18:
+#     if the pod reaches the last band, that is flagged, drawn on screen as
+#     "POD RUNS OFF FAR END", and explained once in the log.
+#  2. Every decision line now carries the version. Two rounds have been spent on
+#     output from a version that was not the one being discussed, and a log line
+#     that does not say what produced it cannot be trusted.
+# ----------------------------------------------------------------------------------
+#  v24  THE REFERENCE MUST ONLY LEARN FROM AN EMPTY CHUTE (AND IN REAL TIME).
+#
+#  The v23 dump showed `flesh near third 0.10, far third 0.17` - the flesh
+#  reading THINNER at the stopper end, which is exactly where every pod sits.
+#  That is not a chilli shape, it is the measurement decaying in one place.
+#
+#  The empty-chute reference is a running minimum with an upward leak, and the
+#  leak was PER FRAME. This camera runs at 215 fps, far faster than assumed, so
+#  the reference climbed 0.1 every nine seconds - and it kept updating WHILE A
+#  POD WAS SITTING IN FRONT OF IT. So it slowly absorbed the pod, hardest in the
+#  bands where pods habitually rest: the stopper end. Flesh there reads thin,
+#  taper goes negative, and the answer is APEX on pod after pod.
+#
+#  1. The reference now updates ONLY on frames that read empty (plus warm-up).
+#     It means "what the chute looks like when empty", so it has no business
+#     learning anything while a chilli is in the way. A watchdog forces an
+#     update if nothing has read empty for REF_STALE_MS, so a bad reference can
+#     still recover.
+#  2. The leak is per SECOND, from the clock, not per frame. Frame rate here
+#     varies from 18 to 215 fps depending on what is in view, so anything paced
+#     per frame silently changes behaviour with the scene.
+# ----------------------------------------------------------------------------------
+#  v24b A STALK HAS TO BE A REAL SIGNAL, NOT NOISE.
+#
+#  The v23 profile dump from the machine finally showed the whole picture:
+#
+#      19 | 0.11 0.03 | ##   << STALK
+#      20 | 0.08 0.00 | ##   << STALK
+#      21 | 0.07 0.00 | #    << STALK
+#      22 | 0.05 0.00 | #
+#      23 | 0.04 0.00 | #    <-- far end [pod ends]
+#      stalk bands: 0 at the stopper end, 5 at the far end -> APEX at stopper
+#
+#  Those five bands average 0.07 of a band - one or two pixels out of 28. That
+#  is camera noise on the chute, not a stalk. A real stalk three pixels wide is
+#  0.107. The cue was counting noise and voting APEX with it, at weight 2.4.
+#
+#  Two causes:
+#  1. The chute is overexposed white, so `chute_L` came out near 98 and the
+#     loose limit hit its cap: the banner read `L<=50/90`. With a limit of 90
+#     against a chute at 95-100 there is no headroom, and every speck of noise
+#     counts as object. The limit is now placed PROPORTIONALLY between the body
+#     limit and the chute (`STALK_SPAN`), so it scales with the real contrast
+#     instead of sitting a fixed 8 below a saturated white.
+#  2. Nothing required a stalk to be substantial. `STALK_MIN_W` now demands the
+#     stalk bands average a real width before the cue counts at all. Noise at
+#     0.07 fails it; a genuine stalk at 0.107 passes.
+#
+#  Also: the profile dump now prints the LOOSE column. That column is what
+#  decides the pod extent and the stalk, and it was the one column not shown -
+#  which is why the phantom took an extra round to see.
 # ----------------------------------------------------------------------------------
 #  v23  THE STALK LIMIT IS SET BY THE CHUTE, NOT BY THE BODY LIMIT.
 #
@@ -166,7 +285,7 @@ from pyb import Pin, LED
 
 # One place only. The banner prints this, so the terminal can never disagree
 # with the header again (in v19 it did, and cost a debugging round).
-VERSION = 23
+VERSION = 27
 
 
 # ------------------------------- CONFIG -------------------------------
@@ -210,8 +329,16 @@ TIGHT_MIN     = 12
 # from the body limit - a body limit says how dark the flesh is, which tells you
 # nothing about how pale a stalk may be. Deriving it from the body limit put the
 # threshold BRIGHTER than the stalk, and the stalk went unmeasured.
-CHUTE_MARGIN  = 8
+# Where to put the "anything at all" limit, as a fraction of the way from the
+# body limit up to the chute. Proportional, not a fixed margin: the chute here
+# is overexposed white (L ~98), and a fixed margin left the limit at 90 with no
+# headroom, so noise on the metal counted as object.
+STALK_SPAN    = 0.72
 STALK_L_CAP   = 90
+# A stalk band has to be genuinely occupied. Three pixels of stalk in a 28-pixel
+# channel is 0.107 of a band; noise is 0.03-0.07. Without this the cue counted
+# five bands of noise as a stalk and voted APEX with it at weight 2.4.
+STALK_MIN_W   = 0.09
 
 # Redness, used ONLY to tell a chilli from a shadow on bare metal.
 # It can never say which END is the stem - a pink cloth is redder than a dark
@@ -234,7 +361,11 @@ BAND_THIN     = 0.05     # something is here, at the loose brightness limit
 # Learned per band as a running minimum: every band is empty sometimes, so the
 # smallest value a band has shown recently IS that band's empty reading. See
 # update_reference() for why one number was not enough.
-REF_LEAK      = 0.00005  # how fast the reference is allowed to drift upward
+# Per SECOND, not per frame. Frame rate here swings between 18 and 215 fps with
+# what is in view, so anything paced per frame changes behaviour with the scene:
+# at 215 fps a 0.00005 per-frame leak climbed 0.1 every nine seconds.
+REF_LEAK_PER_S = 0.004
+REF_STALE_MS   = 60000   # if nothing has read empty this long, refresh anyway
 REF_WARMUP    = 40       # frames before the reference is trusted
 # A reference this big means CHANNEL_ROI is catching a lot that is not chilli.
 # It still works, but it is worth narrowing - warned about on screen.
@@ -343,6 +474,22 @@ def _stat(st, name, default=0.0):
         return float(_get(st, name))
     except Exception:
         return default
+
+def stalk_run(loose, start, step):
+    """Contiguous occupied bands outward from the flesh.
+
+    Returns (length, ran_off) where ran_off says the run reached the edge of the
+    channel without stopping - which means it is not a stalk but something
+    continuing outside the view.
+    """
+    n, i = 0, start
+    while 0 <= i < BANDS and loose[i] >= BAND_THIN and n <= MAX_STALK_BANDS + 1:
+        n += 1
+        i += step
+    return n, (i < 0 or i >= BANDS)
+
+def now_ms():
+    return time.ticks_ms()
 
 def clamp_roi(x, y, w, h):
     x0, y0 = max(0, int(x)), max(0, int(y))
@@ -530,11 +677,18 @@ def learn_threshold(img):
     c = chute_brightness(img)
     chute_L = c if chute_L is None else chute_L + 0.25 * (c - chute_L)
 
-def object_limit():
-    """Anything darker than this counts as object - flesh, stalk, anything."""
+def object_limit(lim):
+    """Anything darker than this counts as object - flesh, stalk, anything.
+
+    Sits a fixed FRACTION of the way from the body limit up to the chute, so it
+    scales with the actual contrast. A fixed margin below the chute fails when
+    the chute is overexposed: it left the limit at 90 against metal at 95-100,
+    and noise on the metal started counting as object.
+    """
     if chute_L is None:
         return STALK_L_CAP
-    return int(min(STALK_L_CAP, max(0, chute_L - CHUTE_MARGIN)))
+    span = max(0.0, chute_L - lim)
+    return int(min(STALK_L_CAP, lim + span * STALK_SPAN))
 
 def adapt_threshold(img):
     """Called on frames that read EMPTY: follow slow lighting drift."""
@@ -566,11 +720,26 @@ def mean(seq):
 ref = [1.0] * BANDS
 ref_frames = 0
 
-def update_reference(raw):
+ref_last_ms = None
+ref_last_empty_ms = None
+
+def ref_leak(now):
+    """How much the reference may drift up since the last frame, by the clock."""
+    global ref_last_ms
+    if ref_last_ms is None:
+        ref_last_ms = now
+        return 0.0
+    dt = time.ticks_diff(now, ref_last_ms)
+    ref_last_ms = now
+    if dt < 0 or dt > 2000:
+        dt = 0
+    return REF_LEAK_PER_S * dt / 1000.0
+
+def update_reference(raw, leak):
     global ref_frames
     ref_frames += 1
     for i in range(BANDS):
-        v = ref[i] + REF_LEAK
+        v = ref[i] + leak
         if raw[i] < v:
             v = raw[i]
         ref[i] = v
@@ -578,7 +747,7 @@ def update_reference(raw):
 ref_t = [1.0] * BANDS
 ref2 = [1.0] * BANDS
 
-def update_reference2(raw2):
+def update_reference2(raw2, leak):
     """The same empty-chute reference, at the loose (stalk) limit.
 
     The stalk profile needs this every bit as much as the other two. It was the
@@ -586,31 +755,34 @@ def update_reference2(raw2):
     why the stalk cue was unreliable.
     """
     for i in range(BANDS):
-        v = ref2[i] + REF_LEAK
+        v = ref2[i] + leak
         if raw2[i] < v:
             v = raw2[i]
         ref2[i] = v
 
-def update_reference_t(raw_t):
+def update_reference_t(raw_t, leak):
     """The same empty-chute reference, at the tight (flesh-only) limit.
 
     The flesh profile needs its own background for the same reason the loose one
     does: rails and the stopper bar are dark enough to pass this limit too.
     """
     for i in range(BANDS):
-        v = ref_t[i] + REF_LEAK
+        v = ref_t[i] + leak
         if raw_t[i] < v:
             v = raw_t[i]
         ref_t[i] = v
 
 def reset_reference():          # used by manual2/test_offline.py, not by the loop
     global ref, ref_frames, ref_t, ref2, lim_auto, chute_L
+    global ref_last_ms, ref_last_empty_ms
     ref = [1.0] * BANDS
     ref_t = [1.0] * BANDS
     ref2 = [1.0] * BANDS
     ref_frames = 0
     lim_auto = None
     chute_L = None
+    ref_last_ms = None
+    ref_last_empty_ms = None
 
 # ------------------------------ THE LOOK ------------------------------
 BLANK = {"reason": "empty", "score": 0.0, "lim": 0, "lo": -1, "hi": -1,
@@ -618,7 +790,7 @@ BLANK = {"reason": "empty", "score": 0.0, "lim": 0, "lo": -1, "hi": -1,
          "s_centroid": 0.0, "s_red": 0.0, "w_near": 0.0, "w_far": 0.0,
          "stalk_near": 0, "stalk_far": 0, "red": 0.0, "agree": True,
          "floor": 0.0, "wrong_end": False, "raw": None, "flesh": None,
-         "lo_f": -1, "hi_f": -1, "loose": None, "lim2": 0}
+         "lo_f": -1, "hi_f": -1, "loose": None, "lim2": 0, "runs_off": False}
 
 def look(img):
     out = dict(BLANK)
@@ -628,7 +800,7 @@ def look(img):
     lim = object_threshold(img)
     out["lim"] = lim
 
-    lim2 = max(lim + 4, object_limit())
+    lim2 = max(lim + 4, object_limit(lim))
     out["lim2"] = lim2
     lim_t = max(TIGHT_MIN, int(lim * TIGHT_FRAC))     # flesh only
     thrs = [(0, lim, -128, 127, -128, 127)]
@@ -640,9 +812,6 @@ def look(img):
     # the dark rails down the sides AND the stopper bar inside the bottom edge.
     raw_t = [dark_fraction(img, band_roi(i), lim_t) for i in range(BANDS)]
     raw2 = [dark_fraction(img, band_roi(i), lim2) for i in range(BANDS)]
-    update_reference(raw)
-    update_reference_t(raw_t)
-    update_reference2(raw2)
     prof = [max(0.0, raw[i] - ref[i]) for i in range(BANDS)]
     flesh = [max(0.0, raw_t[i] - ref_t[i]) for i in range(BANDS)]
     loose = [max(0.0, raw2[i] - ref2[i]) for i in range(BANDS)]
@@ -651,20 +820,42 @@ def look(img):
     out["prof"] = prof
     out["flesh"] = flesh
     out["raw"] = raw
-    # Both references have to be updated BEFORE this early return. In the first
-    # cut of v21 the flesh reference was updated after it, so during warm-up it
-    # never learned at all and the flesh profile read zero for ever.
-    if ref_frames < REF_WARMUP:
+
+    # --- learn the reference, but ONLY from an empty chute ---
+    # The reference means "what the chute looks like with nothing in it", so it
+    # has no business learning while a chilli is in the way. It used to update
+    # on every frame, and slowly absorbed the pod - worst in the bands where
+    # pods habitually rest, i.e. the stopper end. The flesh then read thin
+    # there, taper went negative, and the answer was APEX on pod after pod.
+    global ref_last_empty_ms
+    idx = [i for i in range(BANDS) if prof[i] >= BAND_ON]
+    seems_empty = len(idx) < MIN_BODY_BANDS
+    warming = ref_frames < REF_WARMUP
+    # Watchdog: if nothing has read empty for a long time the reference may
+    # itself be the reason, so refresh anyway rather than stay stuck.
+    stale = (ref_last_empty_ms is not None
+             and time.ticks_diff(now_ms(), ref_last_empty_ms) > REF_STALE_MS)
+    if warming or seems_empty or stale:
+        leak = ref_leak(now_ms())
+        update_reference(raw, leak)
+        update_reference_t(raw_t, leak)
+        update_reference2(raw2, leak)
+        if seems_empty or warming:
+            ref_last_empty_ms = now_ms()
+    else:
+        ref_leak(now_ms())            # keep the clock in step, do not drift
+
+    if warming:
         out["reason"] = "learning"
+        return out
+
+    if seems_empty:
+        adapt_threshold(img)          # nothing in the way: safe to follow drift
         return out
 
     # Where the WHOLE pod starts and ends - flesh and stalk together. BAND_ON is
     # deliberately low so the pointed apex is included; it is part of the pod and
     # its narrowness is exactly the signal we are after.
-    idx = [i for i in range(BANDS) if prof[i] >= BAND_ON]
-    if len(idx) < MIN_BODY_BANDS:
-        adapt_threshold(img)          # nothing in the way: safe to follow drift
-        return out
     lo_d, hi_d = idx[0], idx[-1]
 
     # The pod's real extent comes from the LOOSE profile, so that a pale stalk
@@ -680,15 +871,41 @@ def look(img):
     rect = span_rect(lo_d, hi_d)      # redness reads the DARK pod, not the stalk
     out["rect"] = rect
 
+    # A real chilli ends before the box does. If it reaches the last band then
+    # either CHANNEL_ROI is longer than the chute and its far end is sitting on
+    # something dark, or the pod is longer than the box. Either way the far
+    # third is not chilli and taper is comparing against a fiction.
+    out["runs_off"] = (hi >= BANDS - 1)
+
     # Now the FLESH alone, measured at a tighter (darker) limit. Everything the
     # pod occupies that is not flesh is stalk - and which END that sits on is
     # the single most direct answer to the question being asked.
-    fidx = [i for i in range(lo_d, hi_d + 1) if flesh[i] >= BAND_ON]
-    if len(fidx) < MIN_BODY_BANDS:
-        # Something is lying there but none of it is dark enough to be flesh.
+    # A chilli is ONE CONNECTED OBJECT, and it is the one at the stopper. Take
+    # the contiguous flesh run nearest the stopper that is long enough to be a
+    # pod; anything detached beyond it is something else in frame.
+    #
+    # Taking first-to-last matching band instead pulled in detached patches: on
+    # the machine, flesh at bands 19-20, nothing at 21, then background at 22-23
+    # dark enough to pass the flesh limit. That patch went into taper's far
+    # third and was averaged with real chilli.
+    lo_f = hi_f = -1
+    i = lo_d
+    while i <= hi_d:
+        if flesh[i] >= BAND_ON:
+            j = i
+            while j + 1 <= hi_d and flesh[j + 1] >= BAND_ON:
+                j += 1
+            if j - i + 1 >= MIN_BODY_BANDS:
+                lo_f, hi_f = i, j
+                break
+            i = j + 1
+        else:
+            i += 1
+    if lo_f < 0:
+        # Something is lying there but no run of it is dark enough, and long
+        # enough, to be a chilli.
         out["reason"] = "no_read"
         return out
-    lo_f, hi_f = fidx[0], fidx[-1]
     out["lo_f"], out["hi_f"] = lo_f, hi_f
 
     # --- 2. is it a chilli, or a shadow on bare metal? presence only ---
@@ -747,11 +964,29 @@ def look(img):
     # Because (a) sits between the flesh and the stopper, this cue is now
     # genuinely TWO-SIDED: it can vote STEM as well as APEX. In v18 it could
     # only ever vote APEX, which is why it had to be held below taper.
-    # The stalk is simply the part of the pod that is not flesh, at either end.
-    # One expression now covers both a stalk dark enough to pass the body limit
-    # and a pale one visible only in the loose profile.
-    stalk_near = lo_f - lo
-    stalk_far = hi - hi_f
+    # The stalk is the part of the pod that is not flesh - but measured as a
+    # CONTIGUOUS run outward from the flesh, because a stalk is attached to the
+    # pod. The old `hi - hi_f` counted every band in between, gaps included.
+    stalk_near, ran_off_near = stalk_run(loose, lo_f - 1, -1)
+    stalk_far, ran_off_far = stalk_run(loose, hi_f + 1, +1)
+
+    # A stalk ENDS. If the run reaches the edge of the channel at the FAR end,
+    # it is not a stalk - a stalk stops, background does not. This is what the
+    # grey area above the chute was being read as: five bands at `any` 0.33-0.49
+    # with no flesh in them, outvoting a correct taper at weight 2.4.
+    #
+    # The near end keeps the opposite rule. A stalk there SHOULD reach the edge,
+    # because the pod is resting against the stopper. Nothing bounds the far
+    # side, so nothing there may be assumed to terminate.
+    if ran_off_far:
+        stalk_far = 0
+
+    # A stalk must be substantial, not a few noisy pixels. Five bands averaging
+    # 0.07 - one pixel in fourteen - were once counted as a stalk.
+    if stalk_near > 0 and mean(loose[lo_f - stalk_near:lo_f]) < STALK_MIN_W:
+        stalk_near = 0
+    if stalk_far > 0 and mean(loose[hi_f + 1:hi_f + 1 + stalk_far]) < STALK_MIN_W:
+        stalk_far = 0
     # A run longer than MAX_STALK_BANDS is not a stalk - most likely the next
     # chilli queued up behind this one.
     if stalk_near < MIN_STALK_BANDS or stalk_near > MAX_STALK_BANDS:
@@ -806,7 +1041,8 @@ def print_profile(r):
     """
     if r["raw"] is None:
         return
-    print("  band | pod  flesh | width          (flesh = pod minus stalk)")
+    print("  --- v%d profile, band 0 = stopper (%s) ---" % (VERSION, STOPPER_SIDE))
+    print("  band | any  pod  flesh | width     (any drives extent + stalk)")
     for i in range(BANDS):
         v = r["prof"][i]
         tag = ""
@@ -823,13 +1059,16 @@ def print_profile(r):
         if i == r["hi_f"]:
             tag += "  [flesh ends]"
         f = r["flesh"][i] if r["flesh"] else 0.0
-        if v >= BAND_ON and f < BAND_ON:
+        a = r["loose"][i] if r["loose"] else 0.0
+        if r["lo"] <= i <= r["hi"] and f < BAND_ON:
             tag = "  << STALK" + tag
-        print("   %2d  | %.2f %.2f  | %-20s%s"
-              % (i, v, f, "#" * int(v * 20 + 0.5), tag))
+        print("   %2d  | %.2f %.2f %.2f  | %-18s%s"
+              % (i, a, v, f, "#" * int(max(a, v) * 18 + 0.5), tag))
     print("  flesh near third %.2f  far third %.2f  taper %+.2f -> %s"
           % (r["w_near"], r["w_far"], r["s_taper"],
              "STEM at stopper" if r["s_taper"] > 0 else "APEX at stopper"))
+    if r["runs_off"]:
+        print("  !! the pod reaches the LAST band - the far third is not all chilli")
     print("  stalk bands: %d at the stopper end, %d at the far end -> %s"
           % (r["stalk_near"], r["stalk_far"],
              "no stalk seen" if r["s_stalk"] == 0 else
@@ -983,7 +1222,10 @@ def draw_scene(img, r, headline, color, sub, fps):
     if r["reason"] == "ok" and r["lo"] >= 0:
         stem_lo = r["lo"] if r["score"] > 0 else max(r["lo"], r["hi"] - 2)
         stem_hi = min(r["hi"], r["lo"] + 2) if r["score"] > 0 else r["hi"]
-        draw_rect(img, span_rect(stem_lo, stem_hi), (0, 150, 255), 2)
+        mk = span_rect(stem_lo, stem_hi)
+        draw_rect(img, mk, (0, 150, 255), 2)
+        draw_str(img, max(0, mk[0] - 40), max(0, mk[1] - 9), "STEM?",
+                 color=(0, 150, 255), scale=1)
 
     # --- banner ---
     # Placed in the widest free strip BESIDE the chute. It used to be a fixed
@@ -999,7 +1241,10 @@ def draw_scene(img, r, headline, color, sub, fps):
     draw_str(img, bx + 5, by + 32,
              "L<=%d/%d %s %dfps" % (r["lim"], r["lim2"], mode, int(fps)),
              color=(150, 150, 150), scale=1)
-    if r["floor"] > FLOOR_WARN:
+    if r["runs_off"]:
+        draw_str(img, bx + 5, by + 42, "POD RUNS OFF FAR END",
+                 color=(255, 160, 0), scale=1)
+    elif r["floor"] > FLOOR_WARN:
         draw_str(img, bx + 5, by + 42, "ROI TOO WIDE %.2f" % r["floor"],
                  color=(255, 160, 0), scale=1)
 
@@ -1014,6 +1259,7 @@ pulse_until = 0
 total = 0
 votes = []
 calib_n = 0              # frames seen in CALIBRATE, paces the profile dump
+runoff_warned = False    # the "pod runs off the far end" note is printed once
 stuck_since = 0          # when the pod first stopped short of the stopper
 stuck_lo = -1
 stuck_warned = False
@@ -1142,9 +1388,17 @@ while True:
                 state, t_state = LOCKED, now
                 if SHOW_PROFILE:
                     print_profile(r)
-                print(">>> #%d  %s FIRST -> %s HIGH  ==> %s   "
+                if r["runs_off"] and not runoff_warned:
+                    runoff_warned = True
+                    print("!!! the pod reaches the LAST band of the channel.")
+                    print("    A real chilli ends before the box does, so the far")
+                    print("    third is measuring something that is not chilli and")
+                    print("    taper is comparing against it. Either CHANNEL_ROI is")
+                    print("    longer than the chute (shorten h), or its far end is")
+                    print("    over something dark, or the pod is longer than the box.")
+                print(">>> v%d #%d  %s FIRST -> %s HIGH  ==> %s   "
                       "(score %+.2f  taper %+.2f  stalk %+.0f  cent %+.2f)%s"
-                      % (total, NAME[final],
+                      % (VERSION, total, NAME[final],
                          "P0" if final == "STEM" else "P1",
                          "ROTATE 180 (P2)" if final == ROTATE_ON else "NO ROTATE",
                          final_score, r["s_taper"], r["s_stalk"],
