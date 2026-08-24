@@ -38,7 +38,8 @@ The repo is split into `System1/`, `System2/`, `Trial codes/` and `manual2/`.
 
 ```
 manual2/
-  open_mv_v27.py         <- highest number = current
+  open_mv_v28.py         <- highest number = current
+  open_mv_v27.py
   open_mv_v26.py
   open_mv_v25.py
   open_mv_v24.py
@@ -82,7 +83,7 @@ file is renamed to `main.py` on the camera — do not copy the repo's `main.py`.
 
 ## How the current detector works
 
-Values below are the ones in `open_mv2.py` / `manual2/open_mv_v27.py`.
+Values below are the ones in `open_mv2.py` / `manual2/open_mv_v28.py`.
 
 The channel is a narrow strip, so a chilli lying in it is always lined up with
 it. v18 uses that: instead of hunting for a blob and measuring two small boxes

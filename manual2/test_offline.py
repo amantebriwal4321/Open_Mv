@@ -216,9 +216,9 @@ class FakeImg:
 
 # ---- load the detector ----
 here = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(here, "open_mv_v27.py")).read()
+src = open(os.path.join(here, "open_mv_v28.py")).read()
 mod = {"__name__": "detector"}
-exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v27.py", "exec"), mod)
+exec(compile(src.split("# ============================ STATE MACHINE")[0], "open_mv_v28.py", "exec"), mod)
 look = mod["look"]
 
 # name, kwargs, expected -- "STEM"/"APEX", or a reason string, or "WEAK"
